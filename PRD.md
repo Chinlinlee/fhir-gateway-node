@@ -174,16 +174,16 @@
 
 ### 5.1 SmartFhirScope + SmartScopeChecker
 
-- [ ] `services/smart-scope.service.ts`：解析 scope 字串
-- [ ] 格式：`(user|patient|system)/{ResourceType|*}.{cruds|read|write|*}`
-- [ ] v1：`read` → READ+SEARCH；`write` → CREATE+UPDATE+DELETE
-- [ ] v2：`cruds` 逐字元；`*` 全權限
-- [ ] `SmartScopeChecker` 僅評估 **`patient/`** principal
-- [ ] 測試：`tests/smart-scope.test.ts`
-  - [ ] `hasPermissionCreateObservationPatientPrincipal`
-  - [ ] `hasPermissionCreateObservationPatientPrincipalNoValidScope`
-  - [ ] `hasPermissionReadObservationPatientPrincipalAllResources`
-  - [ ] （其餘 Java 測試案例補齊）
+- [x] `services/smart-scope.service.ts`：解析 scope 字串
+- [x] 格式：`(user|patient|system)/{ResourceType|*}.{cruds|read|write|*}`
+- [x] v1：`read` → READ+SEARCH；`write` → CREATE+UPDATE+DELETE
+- [x] v2：`cruds` 逐字元；`*` 全權限
+- [x] `SmartScopeChecker` 僅評估 **`patient/`** principal
+- [x] 測試：`tests/smart-scope.test.ts`
+  - [x] `hasPermissionCreateObservationPatientPrincipal`
+  - [x] `hasPermissionCreateObservationPatientPrincipalNoValidScope`
+  - [x] `hasPermissionReadObservationPatientPrincipalAllResources`
+  - [x] （其餘 Java 測試案例補齊）
 
 ---
 

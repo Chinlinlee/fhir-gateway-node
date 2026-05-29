@@ -1,3 +1,4 @@
+import { FHIR_R4_RESOURCE_TYPES } from "../constants/fhir-r4-resource-types";
 import { InvalidRequestError } from "../errors/invalid-request.error";
 
 /** HL7 FHIR id type pattern. / 對齊 FhirUtil.ID_PATTERN */
@@ -16,6 +17,11 @@ export function checkFhirIdOrFail(idPart: string): string {
 
 export function isSameResourceType(resourceType: string | null | undefined, expected: string): boolean {
     return resourceType === expected;
+}
+
+/** 對齊 Java FhirUtil.isValidFhirResourceType / HAPI ResourceType.fromCode。 */
+export function isValidFhirResourceType(resourceType: string): boolean {
+    return FHIR_R4_RESOURCE_TYPES.has(resourceType);
 }
 
 /** Parse `Patient/abc` or `abc` into patient id. */
