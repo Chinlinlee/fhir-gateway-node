@@ -136,17 +136,17 @@
 
 ### 3.1 PatientFinder Service
 
-- [ ] `services/patient-finder.service.ts`
-- [ ] `findPatientsFromParams(path, method, queryParams)`：
-  - [ ] `GET /Patient/{id}` → 單一 id
-  - [ ] `GET /Patient?_id=...` → 逗號分隔多 id
-  - [ ] compartment search param 對應（`CompartmentDefinition-patient.json`）
-  - [ ] `GET /{ResourceType}/{id}`（非 Patient）→ 拒絕
-  - [ ] 無法推斷 → 拒絕
-- [ ] 硬編碼 `blockJoins=true`：拒絕 chaining、`_has`、`_include`、`_revinclude`
-- [ ] `findPatientsFromBundle(bundle)`：僅 `type=transaction`；支援 GET/POST/PUT/PATCH/DELETE entries；PATCH 僅 `Binary` + `application/json-patch+json`
-- [ ] 輸出結構：`referencedPatients`、`updatedPatients`、`deletedPatients`、`patientsToCreate`（對齊 `BundlePatients`）
-- [ ] 測試：`tests/patient-finder.test.ts` — 使用 `fhir-gateway` test resources JSON（`patient_id_search.json` 等），**不 mock FHIR 解析**
+- [x] `services/patient-finder.service.ts`
+- [x] `findPatientsFromParams(path, queryParams)`：
+  - [x] `GET /Patient/{id}` → 單一 id
+  - [x] `GET /Patient?_id=...` → 逗號分隔多 id
+  - [x] compartment search param 對應（`CompartmentDefinition-patient.json`）
+  - [x] `GET /{ResourceType}/{id}`（非 Patient）→ 拒絕
+  - [x] 無法推斷 → 拒絕
+- [x] 硬編碼 `blockJoins=true`：拒絕 chaining、`_has`、`_include`、`_revinclude`
+- [x] `findPatientsInBundle(bundle)`：僅 `type=transaction`；支援 GET/POST/PUT/PATCH/DELETE entries；PATCH 僅 `Binary` + `application/json-patch+json`
+- [x] 輸出結構：`referencedPatients`、`updatedPatients`、`deletedPatients`、`patientsToCreate`（對齊 `BundlePatients`）
+- [x] 測試：`tests/patient-finder.test.ts` — 使用 `fhir-gateway` / plugins test resources JSON，**不 mock FHIR 解析**
 
 ---
 

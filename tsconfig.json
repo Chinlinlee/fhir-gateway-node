@@ -4,7 +4,7 @@
         "moduleResolution": "bundler",
         "target": "esnext",
         "lib": ["esnext"],
-        "types": ["node"],
+        "types": ["node", "fhir"],
         "rootDir": ".",
         "sourceMap": true,
         "noUncheckedIndexedAccess": true,
