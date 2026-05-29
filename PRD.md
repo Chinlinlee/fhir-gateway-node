@@ -155,14 +155,16 @@
 
 ### 4.1 型別與介面
 
-- [ ] `types/access-checker.ts`：`AccessChecker`、`AccessCheckerFactory`、`AccessDecision`
-- [ ] `AccessDecision`：`canAccess()`、`getRequestMutation()`、`postProcess()`、`getUserWho()`
-- [ ] `RequestMutation`：`additionalQueryParams`、`discardQueryParams`
-- [ ] Factory registry：`services/access-checker-registry.service.ts` 依 `ACCESS_CHECKER` 選擇實作
+- [x] `types/access-checker.ts`：`AccessChecker`、`AccessCheckerFactory`、`AccessCheckerCreateContext`
+- [x] `types/access-decision.ts`：`AccessDecision`、`noOpAccessDecision`、`defaultUserWhoFromJwt`
+- [x] `types/request-mutation.ts`：`RequestMutation`（`additionalQueryParams`、`discardQueryParams`）
+- [x] `utils/request-mutation.util.ts`：`applyRequestMutation`（對齊 `BearerAuthorizationInterceptor.mutateRequest`）
+- [x] Factory registry：`services/access-checker-registry.service.ts` 依名稱註冊／建立（已註冊 `permissive`；`list`/`patient` 待 Phase 6）
 
 ### 4.2 測試
 
-- [ ] `tests/access-decision.test.ts` — mutation 合併/刪除 query 的純函數測試（對照 `BearerAuthorizationInterceptorTest.mutateRequest` / `mutateRequestRemoveQueryParams`）
+- [x] `tests/access-decision.test.ts` — mutation 合併/刪除 query（對照 `mutateRequest` / `mutateRequestRemoveQueryParams`）
+- [x] `tests/access-checker-registry.test.ts`、`tests/default-user-who.test.ts`
 
 ---
 

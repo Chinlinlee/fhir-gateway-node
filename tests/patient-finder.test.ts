@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
-import { InvalidRequestError } from "../src/errors/invalid-request.error";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import type { FhirBundle } from "../src/types/fhir-bundle";
 import { isValidFhirId, parseResourcePath } from "../src/utils/fhir.util";
