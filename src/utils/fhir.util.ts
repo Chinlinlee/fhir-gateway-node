@@ -60,6 +60,10 @@ export type ParsedResourcePath = {
 };
 
 /** Parse FHIR request path e.g. `Observation/123` or `Patient`. */
+export function getResourceIdOrNull(requestPath: string): string | null {
+    return parseResourcePath(requestPath).resourceId;
+}
+
 export function parseResourcePath(requestPath: string): ParsedResourcePath {
     const normalized = requestPath.replace(/^\/+/, "").replace(/\/+$/, "");
     if (normalized.length === 0) {

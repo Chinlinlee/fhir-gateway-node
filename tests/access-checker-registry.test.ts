@@ -5,21 +5,31 @@ import {
     AccessCheckerRegistryService,
     createDefaultAccessCheckerRegistry,
 } from "../src/services/access-checker-registry.service";
-import { accessGranted } from "../src/types/access-decision";
 import type { AccessChecker, AccessCheckerFactory } from "../src/types/access-checker";
-import type { FhirRequestDetails } from "../src/types/fhir-request";
+import { accessGranted } from "../src/types/access-decision";
 
 const stubContext = {
     jwt: { payload: { sub: "user-1" }, protectedHeader: { alg: "RS256" } },
     patientFinder: {
         findPatientsFromParams: () => new Set<string>(),
+        findPatientsForAccessCheck: () => new Set<string>(),
+        findPatientsInResource: () => new Set<string>(),
+        findPatientsInPatch: () => new Set<string>(),
+        findPatientsInBundle: () => ({
+            referencedPatients: [],
+            updatedPatients: new Set<string>(),
+            deletedPatients: new Set<string>(),
+            patientsToCreate: false,
+        }),
     },
 };
 
 describe("AccessCheckerRegistryService", () => {
-    it("createDefaultAccessCheckerRegistry registers permissive", () => {
+    it("createDefaultAccessCheckerRegistry registers built-in checkers", () => {
         const registry = createDefaultAccessCheckerRegistry();
         expect(registry.has("permissive")).toBe(true);
+        expect(registry.has("list")).toBe(true);
+        expect(registry.has("patient")).toBe(true);
         const checker = registry.create("permissive", stubContext);
         const decision = checker.checkAccess({
             requestPath: "Patient",
@@ -44,11 +54,13 @@ describe("AccessCheckerRegistryService", () => {
         registry.register("custom", factory);
         const checker = registry.create("custom", stubContext);
         expect(
-            checker.checkAccess({
-                requestPath: "Observation",
-                requestType: "GET",
-                queryParams: {},
-            }).canAccess(),
+            checker
+                .checkAccess({
+                    requestPath: "Observation",
+                    requestType: "GET",
+                    queryParams: {},
+                })
+                .canAccess(),
         ).toBe(true);
     });
 });

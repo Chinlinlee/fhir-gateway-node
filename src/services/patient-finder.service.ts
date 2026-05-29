@@ -85,7 +85,8 @@ export class PatientFinderService {
         return patientIds ?? new Set();
     }
 
-    findPatientsInBundle(bundle: FhirBundle): BundlePatients {
+    findPatientsInBundle(bundle: FhirBundle, options?: { strict?: boolean }): BundlePatients {
+        const strict = options?.strict ?? false;
         if (bundle.type !== "transaction") {
             throw new InvalidRequestError("Bundle type needs to be transaction!");
         }
@@ -96,10 +97,73 @@ export class PatientFinderService {
         }
 
         for (const entry of bundle.entry) {
-            this.processBundleEntry(entry, builder);
+            this.processBundleEntry(entry, builder, strict);
         }
 
         return builder.build();
+    }
+
+    /** AccessChecker 用；對齊 Java findPatientsFromParams 嚴格語意。 */
+    findPatientsForAccessCheck(requestPath: string, queryParams: Record<string, string[]>): Set<string> {
+        const { resourceName, resourceId } = parseResourcePath(requestPath);
+
+        if (!resourceName) {
+            throw new InvalidRequestError(`No resource specified for request ${requestPath}`);
+        }
+
+        if (isSameResourceType(resourceName, "Patient")) {
+            const patientIds = this.getPatientIdsFromPatientUrl(resourceId, queryParams);
+            if (patientIds.size === 0) {
+                throw new InvalidRequestError(`Patient ID cannot be found in ${requestPath}`);
+            }
+            return patientIds;
+        }
+
+        if (resourceId) {
+            throw new InvalidRequestError(
+                `Direct resource fetch is only supported for Patient; use search for ${resourceName}`,
+            );
+        }
+
+        const patientIds = this.checkParamsAndFindPatientIds(resourceName, queryParams);
+        if (!patientIds || patientIds.size === 0) {
+            throw new InvalidRequestError(`Patient ID cannot be found in ${requestPath}`);
+        }
+        return patientIds;
+    }
+
+    findPatientsInResource(requestPath: string, requestBody: string): Set<string> {
+        const { resourceName } = parseResourcePath(requestPath);
+        if (!resourceName) {
+            throw new InvalidRequestError(`No resource specified for request ${requestPath}`);
+        }
+
+        const resource = JSON.parse(requestBody) as fhir4.Resource;
+        if (!isSameResourceType(resource.resourceType, resourceName)) {
+            throw new InvalidRequestError(
+                `The provided resource ${resource.resourceType} is different from what is on the path: ${resourceName}`,
+            );
+        }
+
+        const paths = this.patientFhirPaths[resourceName];
+        if (!paths) {
+            throw new InvalidRequestError("Patient reference must exist in resource");
+        }
+
+        const patientIds = findPatientIdsInResource(resource, paths);
+        if (patientIds.size === 0) {
+            throw new InvalidRequestError("Patient reference must exist in resource");
+        }
+
+        return patientIds;
+    }
+
+    findPatientsInPatch(requestBody: string, resourceName: string): Set<string> {
+        const patchArray = JSON.parse(requestBody) as unknown;
+        if (!Array.isArray(patchArray)) {
+            throw new InvalidRequestError("Invalid patch!");
+        }
+        return this.parseJsonArrayForPatch(patchArray, resourceName);
     }
 
     private getPatientIdsFromPatientUrl(resourceId: string | null, queryParams: Record<string, string[]>): Set<string> {
@@ -152,7 +216,7 @@ export class PatientFinderService {
         }
     }
 
-    private processBundleEntry(entry: FhirBundleEntry, builder: BundlePatientsBuilder): void {
+    private processBundleEntry(entry: FhirBundleEntry, builder: BundlePatientsBuilder, strict: boolean): void {
         const request = entry.request;
         if (!request) {
             throw new InvalidRequestError("Bundle entry requires a request field!");
@@ -167,27 +231,27 @@ export class PatientFinderService {
 
         switch (method) {
             case "GET":
-                this.processGet(request, builder);
+                this.processGet(request, builder, strict);
                 break;
             case "POST":
                 this.processPost(entry, request, builder);
                 break;
             case "PUT":
-                this.processPut(entry, request, builder);
+                this.processPut(entry, request, builder, strict);
                 break;
             case "PATCH":
-                this.processPatch(entry, request, builder);
+                this.processPatch(entry, request, builder, strict);
                 break;
             case "DELETE":
-                this.processDelete(request, builder);
+                this.processDelete(request, builder, strict);
                 break;
             default:
                 throw new InvalidRequestError(`HTTP request method ${method} is not supported!`);
         }
     }
 
-    private processGet(request: fhir4.BundleEntryRequest, builder: BundlePatientsBuilder): void {
-        const patientIds = this.findPatientIdsFromRequestUrl(request.url);
+    private processGet(request: fhir4.BundleEntryRequest, builder: BundlePatientsBuilder, strict: boolean): void {
+        const patientIds = this.findPatientIdsFromRequestUrl(request.url ?? "", strict);
         for (const patientId of patientIds) {
             builder.addPatient("READ", patientId);
         }
@@ -217,6 +281,7 @@ export class PatientFinderService {
         entry: FhirBundleEntry,
         request: fhir4.BundleEntryRequest,
         builder: BundlePatientsBuilder,
+        strict: boolean,
     ): void {
         const resource = entry.resource;
         if (!resource) {
@@ -224,7 +289,7 @@ export class PatientFinderService {
         }
 
         const resourceType = resource.resourceType;
-        const patientIds = this.findPatientIdsFromRequestUrl(request.url);
+        const patientIds = this.findPatientIdsFromRequestUrl(request.url ?? "", strict);
 
         if (isSameResourceType(resourceType, "Patient")) {
             if (patientIds.size > 1) {
@@ -245,13 +310,14 @@ export class PatientFinderService {
         entry: FhirBundleEntry,
         request: fhir4.BundleEntryRequest,
         builder: BundlePatientsBuilder,
+        strict: boolean,
     ): void {
         const resource = entry.resource;
         if (!resource) {
             throw new InvalidRequestError("Bundle entry requires a resource field!");
         }
 
-        const patientIds = this.findPatientIdsFromRequestUrl(request.url);
+        const patientIds = this.findPatientIdsFromRequestUrl(request.url ?? "", strict);
         // PATCH target 由 request.url 決定（body 為 Binary），非 Binary.resourceType
         const patchTargetIsPatient = this.isPatientRequestUrl(request.url);
 
@@ -294,8 +360,8 @@ export class PatientFinderService {
         }
     }
 
-    private processDelete(request: fhir4.BundleEntryRequest, builder: BundlePatientsBuilder): void {
-        const patientIds = this.findPatientIdsFromRequestUrl(request.url);
+    private processDelete(request: fhir4.BundleEntryRequest, builder: BundlePatientsBuilder, strict: boolean): void {
+        const patientIds = this.findPatientIdsFromRequestUrl(request.url ?? "", strict);
         if (this.isPatientRequestUrl(request.url)) {
             builder.addDeletedPatients(patientIds);
         } else {
@@ -321,9 +387,12 @@ export class PatientFinderService {
         builder.addReferencedPatients(referencePatientIds);
     }
 
-    private findPatientIdsFromRequestUrl(url: string): Set<string> {
+    private findPatientIdsFromRequestUrl(url: string, strict = false): Set<string> {
         if (!url) {
-            throw new InvalidRequestError("Patient IDs cannot be found in ");
+            if (strict) {
+                throw new InvalidRequestError("Patient IDs cannot be found in ");
+            }
+            return new Set();
         }
 
         const parsed = new URL(url, "http://localhost");
@@ -351,6 +420,9 @@ export class PatientFinderService {
             }
         }
 
+        if (strict) {
+            throw new InvalidRequestError(`Patient IDs cannot be found in ${url}`);
+        }
         return new Set();
     }
 

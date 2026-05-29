@@ -159,7 +159,7 @@
 - [x] `types/access-decision.ts`：`AccessDecision`、`noOpAccessDecision`、`defaultUserWhoFromJwt`
 - [x] `types/request-mutation.ts`：`RequestMutation`（`additionalQueryParams`、`discardQueryParams`）
 - [x] `utils/request-mutation.util.ts`：`applyRequestMutation`（對齊 `BearerAuthorizationInterceptor.mutateRequest`）
-- [x] Factory registry：`services/access-checker-registry.service.ts` 依名稱註冊／建立（已註冊 `permissive`；`list`/`patient` 待 Phase 6）
+- [x] Factory registry：`services/access-checker-registry.service.ts` 依名稱註冊／建立（`permissive` / `list` / `patient`）
 
 ### 4.2 測試
 
@@ -194,29 +194,29 @@
 > Java 參考：`ListAccessCheckerTest.java`、`AccessGrantedAndUpdateListTest.java`  
 > JWT claim：`patient_list`
 
-- [ ] `services/access-checkers/list-access-checker.service.ts`
-- [ ] GET：`GET /List/{patientListId}` 僅自己的 list；search 需 **全部** patient 在 list
-- [ ] POST：`POST /Patient` 允許 + postProcess 加入 list；其他 resource **任一** patient 在 list
-- [ ] PUT/PATCH/DELETE：對照 SPEC §9.1 表格
-- [ ] Bundle transaction：禁止危險組合；新建 Patient → 更新 list
-- [ ] List 驗證查詢：`GET /List?_id=...&_elements=id&item=Patient/...`，`bundle.total == 1`
-- [ ] 測試：`tests/list-access-checker.test.ts` — 逐項對照 Java `@Test` 方法名（使用 test resources bundle/json）
+- [x] `services/access-checkers/list-access-checker.service.ts`
+- [x] GET：`GET /List/{patientListId}` 僅自己的 list；search 需 **全部** patient 在 list
+- [x] POST：`POST /Patient` 允許 + postProcess 加入 list；其他 resource **任一** patient 在 list
+- [x] PUT/PATCH/DELETE：對照 SPEC §9.1 表格
+- [x] Bundle transaction：禁止危險組合；新建 Patient → 更新 list
+- [x] List 驗證查詢：`GET /List?_id=...&_elements=id&item=Patient/...`，`bundle.total == 1`
+- [x] 測試：`tests/list-access-checker.test.ts` — 逐項對照 Java `@Test` 方法名（使用 test resources bundle/json）
 
 ### 6.2 PatientAccessChecker（`ACCESS_CHECKER=patient`）
 
 > Java 參考：`PatientAccessCheckerTest.java`  
 > JWT claims：**`patient`**（非 `patient_id`）、`scope`
 
-- [ ] `services/access-checkers/patient-access-checker.service.ts`
-- [ ] 常數 `PATIENT_CLAIM = "patient"`
-- [ ] GET/POST/PUT/PATCH/DELETE/Bundle 規則：對照 SPEC §9.2（POST Patient 拒絕、DELETE Patient 拒絕等）
-- [ ] 測試：`tests/patient-access-checker.test.ts` — 對照 Java 測試案例（claim 改為 `patient`）
+- [x] `services/access-checkers/patient-access-checker.service.ts`
+- [x] 常數 `PATIENT_CLAIM = "patient"`
+- [x] GET/POST/PUT/PATCH/DELETE/Bundle 規則：對照 SPEC §9.2（POST Patient 拒絕、DELETE Patient 拒絕等）
+- [x] 測試：`tests/patient-access-checker.test.ts` — 對照 Java 測試案例（claim 改為 `patient`）
 
 ### 6.3 PermissiveAccessChecker（僅 DEV）
 
-- [ ] `RUN_MODE=DEV` + `ACCESS_CHECKER=permissive`：有效 JWT 即放行（AllowedQueries 仍可 bypass）
-- [ ] PROD 選 permissive → 啟動失敗或拒絕載入
-- [ ] 測試：`tests/permissive-access-checker.test.ts`
+- [x] `RUN_MODE=DEV` + `ACCESS_CHECKER=permissive`：有效 JWT 即放行（AllowedQueries 仍可 bypass）
+- [x] PROD 選 permissive → 啟動失敗或拒絕載入
+- [x] 測試：`tests/permissive-access-checker.test.ts`
 
 ---
 

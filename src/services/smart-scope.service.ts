@@ -46,8 +46,7 @@ const SMART_V1_READ = "read";
 const SMART_V1_WRITE = "write";
 
 /** 對齊 Java SmartFhirScope.VALID_SCOPE_PATTERN */
-const VALID_SCOPE_PATTERN =
-    /^((?:user|patient|system)\/((?:\*)|(?:[a-zA-Z]+))\.((?:\*)|(?:[cruds]+)|(?:read|write)))$/;
+const VALID_SCOPE_PATTERN = /^((?:user|patient|system)\/((?:\*)|(?:[a-zA-Z]+))\.((?:\*)|(?:[cruds]+)|(?:read|write)))$/;
 
 export type SmartFhirScope = {
     principal: SmartScopePrincipal;

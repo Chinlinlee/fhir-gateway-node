@@ -9,4 +9,6 @@ export type FhirRequestDetails = {
     requestType: FhirRequestMethod;
     /** Query param name → one or more values (multi-value supported for ANY_VALUE). */
     queryParams: Record<string, string[]>;
+    /** Raw JSON request body for POST/PUT/PATCH/Bundle；AccessChecker 解析用。 */
+    requestBody?: string;
 };
