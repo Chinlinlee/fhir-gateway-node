@@ -103,9 +103,9 @@
 
 ### 1.2 SMART well-known 端點（免 JWT）
 
-- [ ] `routes/well-known.route.ts`：`GET /fhir/.well-known/smart-configuration`
-- [ ] 從 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 代理 OIDC JSON
-- [ ] 測試：對照 `BearerAuthorizationInterceptorTest.authorizeRequestWellKnown` 行為（可用 undici intercept issuer）
+- [x] `routes/well-known.route.ts`：`GET /fhir/.well-known/smart-configuration`
+- [x] 從 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 代理 OIDC JSON（啟動時由 `TokenVerifierService` 快取）
+- [x] 測試：`tests/well-known.test.ts` — 對照 `BearerAuthorizationInterceptorTest.authorizeRequestWellKnown`
 
 ---
 
