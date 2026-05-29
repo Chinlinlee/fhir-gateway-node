@@ -20,12 +20,20 @@
 | `PatientAccessChecker` JWT claim | **`PATIENT_CLAIM = "patient"`**（原版 Java 為 `patient_id`；本專案刻意採用 `patient`） |
 | `PatientAccessChecker` scope principal | 僅使用 `Principal.PATIENT`（`patient/...` scopes） |
 | 目錄結構 | `configs` / `constants` / `controllers` / `middlewares` / `routes` / `services` / `types` / `utils` / `validations` / `models` |
+| **驗證（Schema）** | **統一使用 [Zod](https://zod.dev/)**（Elysia [Standard Schema](https://elysiajs.com/essential/validation)）；**禁止**新增 `Elysia.t` / TypeBox schema |
+
+### 驗證規範（Zod）
+
+- **HTTP route**（`body` / `query` / `params` / `response`）：在 `validations/**/*.schema.ts` 定義 `z.object(...)`，掛到 route 第三參數；型別用 `z.infer<typeof Schema>`。
+- **非 HTTP**（環境變數、設定檔、純業務 DTO）：同樣用 Zod；可放 `configs/*.schema.ts` 或 `validations/**/*.schema.ts`。
+- **不要**使用 `import { t } from 'elysia'` 撰寫新 schema；`@sinclair/typebox` 若為 Elysia 傳遞依賴可保留，不主動新增 TypeBox 程式碼。
+- 錯誤處理：`schema.safeParse()` 或 `.parse()`；對外拋出專案自訂錯誤（如 `ConfigError`）。
 
 ### 建議目錄對照（Elysia best-practice → 本 repo）
 
 | Best-practice 概念 | 本專案路徑 |
 |--------------------|------------|
-| `model` (schema) | `validations/**/*.schema.ts`（命名如 `AuthSchema`，避免與 DB model 混淆） |
+| `model` (schema) | `validations/**/*.schema.ts` 或 `configs/*.schema.ts`（**Zod**；命名如 `GatewayConfigSchema`，避免與 DB model 混淆） |
 | `service` | `services/**/*.service.ts` |
 | route handler 本體 | `controllers/**/*.controller.ts`（純函數，不接 `Request`） |
 | Elysia plugin | `middlewares/**/*.ts` |
@@ -45,7 +53,7 @@
 
 ### 0.1 依賴與腳本
 
-- [x] 安裝並鎖定：`undici`、`fhir-kit-client`、`jose`（或等效 RS256 JWT）、`@elysiajs/eden`、`vitest`（需能跑 Eden Treaty）
+- [x] 安裝並鎖定：`undici`、`fhir-kit-client`、`jose`（或等效 RS256 JWT）、`@elysiajs/eden`、`vitest`、`zod`（需能跑 Eden Treaty）
 - [x] `package.json` scripts：`dev`、`build`、`start`、`test`、`test:watch`
 - [x] TypeScript strict（`noImplicitAny` 等），**禁止 `any`**（必要時用 `unknown` + narrow）
 
@@ -58,23 +66,23 @@
 
 ### 0.3 設定載入（對應 SPEC §4）
 
-- [ ] `configs/env.schema.ts` + `configs/index.ts`：啟動時驗證環境變數
-- [ ] 必要變數：`PROXY_TO`、`TOKEN_ISSUER`、`BACKEND_TYPE`（`HAPI` \| `GCP`）、`ACCESS_CHECKER`（`list` \| `patient` \| 自訂名）
-- [ ] 選用：`ALLOWED_QUERIES_FILE`、`AUDIT_EVENT_ACTIONS_CONFIG`、`WELL_KNOWN_ENDPOINT`（預設 `.well-known/openid-configuration`）、`RUN_MODE`（`DEV` \| `PROD`，預設 `PROD`）
-- [ ] `AUDIT_EVENT_ACTIONS_CONFIG` 非法字元 → 啟動失敗（對照 `IllegalStateException`）
-- [ ] `RUN_MODE=DEV`：`TOKEN_ISSUER` mismatch 容忍、`ACCESS_CHECKER=permissive` 僅 DEV 可用
-- [ ] 測試：`tests/config.test.ts` — 缺必要變數 / 非法 audit 字元 / DEV permissive 規則（無 mock）
+- [x] `configs/env.schema.ts` + `configs/index.ts`：啟動時驗證環境變數
+- [x] 必要變數：`PROXY_TO`、`TOKEN_ISSUER`、`BACKEND_TYPE`（`HAPI` \| `GCP`）、`ACCESS_CHECKER`（`list` \| `patient` \| 自訂名）
+- [x] 選用：`ALLOWED_QUERIES_FILE`、`AUDIT_EVENT_ACTIONS_CONFIG`、`WELL_KNOWN_ENDPOINT`（預設 `.well-known/openid-configuration`）、`RUN_MODE`（`DEV` \| `PROD`，預設 `PROD`）
+- [x] `AUDIT_EVENT_ACTIONS_CONFIG` 非法字元 → 啟動失敗（對照 `IllegalStateException`）
+- [x] `RUN_MODE=DEV`：`TOKEN_ISSUER` mismatch 容忍、`ACCESS_CHECKER=permissive` 僅 DEV 可用
+- [x] 測試：`tests/config.test.ts` — 缺必要變數 / 非法 audit 字元 / DEV permissive 規則（無 mock）
 
 ### 0.4 靜態資源與常數
 
-- [ ] 從 `fhir-gateway/resources` 複製：`CompartmentDefinition-patient.json`、`patient_paths.json`、`hapi_page_url_allowed_queries.json` 等
-- [ ] `constants/fhir.ts`：R4、封鎖的 search 修飾（chaining、`_has`、`_include`、`_revinclude`）
-- [ ] 測試：資源檔可被載入且 JSON 合法（無 mock）
+- [x] 從 `fhir-gateway/resources` 複製：`CompartmentDefinition-patient.json`、`patient_paths.json`、`hapi_page_url_allowed_queries.json` 等（置於 `src/resources/`）
+- [x] `constants/fhir.ts`：R4、封鎖的 search 修飾（chaining、`_has`、`_include`、`_revinclude`）
+- [x] 測試：資源檔可被載入且 JSON 合法（無 mock）
 
 ### 0.5 CORS middleware
 
-- [ ] `middlewares/cors.ts`：`Access-Control-Allow-Origin: *`，允許 `Authorization` header（SPEC §12）
-- [ ] 測試：Eden Treaty OPTIONS / 帶 `Authorization` 的 preflight（無 mock）
+- [x] `middlewares/cors.ts`：`@elysiajs/cors`，允許 `Authorization` header（SPEC §12）
+- [x] 測試：`app.handle` OPTIONS preflight（無 mock）
 
 ---
 
@@ -308,7 +316,7 @@
 
 | Phase | 完成項 / 總項 |
 |-------|----------------|
-| 0 | 6 / TBD（0.1–0.2 完成） |
+| 0 | 0.1–0.5 完成 |
 | 1 | 0 / TBD |
 | … | … |
 

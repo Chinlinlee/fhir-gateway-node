@@ -1,0 +1,78 @@
+import { describe, it, expect } from "vitest";
+import { ConfigError, loadGatewayConfig, minimalValidEnv } from "../src/configs";
+
+describe("loadGatewayConfig", () => {
+    it("load minimal valid configuration", () => {
+        const config = loadGatewayConfig(minimalValidEnv());
+
+        expect(config.proxyTo).toBe("http://localhost:8080/fhir");
+        expect(config.tokenIssuer).toBe("http://localhost:9080/auth/realms/test");
+        expect(config.backendType).toBe("HAPI");
+        expect(config.accessChecker).toBe("patient");
+        expect(config.runMode).toBe("PROD");
+        expect(config.wellKnownEndpoint).toBe(".well-known/openid-configuration");
+        expect(config.auditEventActions).toEqual([]);
+    });
+
+    it("strips trailing slash from PROXY_TO", () => {
+        const config = loadGatewayConfig(
+            minimalValidEnv({
+                PROXY_TO: "http://localhost:8080/fhir/",
+            }),
+        );
+        expect(config.proxyTo).toBe("http://localhost:8080/fhir");
+    });
+
+    it("throws when PROXY_TO is missing", () => {
+        const env = minimalValidEnv();
+        delete env.PROXY_TO;
+        expect(() => loadGatewayConfig(env)).toThrow(ConfigError);
+    });
+
+    it("throws when BACKEND_TYPE is invalid", () => {
+        expect(() => loadGatewayConfig(minimalValidEnv({ BACKEND_TYPE: "MYSQL" }))).toThrow(/GCP or HAPI/);
+    });
+
+    it("parses AUDIT_EVENT_ACTIONS_CONFIG as per-character codes", () => {
+        const config = loadGatewayConfig(minimalValidEnv({ AUDIT_EVENT_ACTIONS_CONFIG: "CR" }));
+        expect(config.auditEventActions).toEqual(["C", "R"]);
+    });
+    it("throws on invalid audit action code", () => {
+        expect(() => loadGatewayConfig(minimalValidEnv({ AUDIT_EVENT_ACTIONS_CONFIG: "CRX" }))).toThrow(
+            /Invalid AuditEvent Action/,
+        );
+    });
+    it("allows permissive access checker only in DEV mode", () => {
+        const devConfig = loadGatewayConfig(
+            minimalValidEnv({
+                ACCESS_CHECKER: "permissive",
+                RUN_MODE: "DEV",
+            }),
+        );
+        expect(devConfig.accessChecker).toBe("permissive");
+        expect(devConfig.runMode).toBe("DEV");
+        expect(() =>
+            loadGatewayConfig(
+                minimalValidEnv({
+                    ACCESS_CHECKER: "permissive",
+                    RUN_MODE: "PROD",
+                }),
+            ),
+        ).toThrow(/permissive/);
+    });
+
+    it("defaults RUN_MODE to PROD", () => {
+        const env = minimalValidEnv();
+        delete env.RUN_MODE;
+        expect(loadGatewayConfig(env).runMode).toBe("PROD");
+    });
+
+    it("reads WELL_KNOWN_ENDPOINT from environment", () => {
+        const config = loadGatewayConfig(
+            minimalValidEnv({
+                WELL_KNOWN_ENDPOINT: ".well-known/custom",
+            }),
+        );
+        expect(config.wellKnownEndpoint).toBe(".well-known/custom");
+    });
+});
