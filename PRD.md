@@ -92,14 +92,14 @@
 
 ### 1.1 TokenVerifier Service
 
-- [ ] `services/token-verifier.service.ts`：解析 `Authorization: Bearer <JWT>`
-- [ ] 僅接受 **RS256**；向 `TOKEN_ISSUER` GET 取 `public_key`（Keycloak 格式 JSON）
-- [ ] 驗證 `iss` === `TOKEN_ISSUER`（`RUN_MODE=DEV` 可跳過 mismatch）
-- [ ] 無 token / 格式錯誤 / 驗簽失敗 → 401 類錯誤（對齊 `AuthenticationException` 語意）
-- [ ] 測試：`tests/token-verifier.test.ts`
-  - [ ] 有效 JWT 通過（測試內產生 RSA key pair + 模擬 issuer HTTP，**優先 undici MockAgent 或本地 test server，避免 mock 整個 service**）
-  - [ ] 錯誤 issuer / 錯誤簽章 / 缺少 Bearer 拒絕
-  - [ ] DEV 模式 issuer mismatch 仍通過
+- [x] `services/token-verifier.service.ts`：解析 `Authorization: Bearer <JWT>`
+- [x] 僅接受 **RS256**；向 `TOKEN_ISSUER` GET 取 `public_key`（Keycloak 格式 JSON）
+- [x] 驗證 `iss` === `TOKEN_ISSUER`（`RUN_MODE=DEV` 可跳過 mismatch）
+- [x] 無 token / 格式錯誤 / 驗簽失敗 → 401 類錯誤（對齊 `AuthenticationException` 語意）
+- [x] 測試：`tests/token-verifier.test.ts`
+  - [x] 有效 JWT 通過（RSA key pair + 本地 issuer HTTP server，無 mock service）
+  - [x] 錯誤 issuer / 錯誤簽章 / 缺少 Bearer 拒絕
+  - [x] DEV 模式 issuer mismatch 仍通過
 
 ### 1.2 SMART well-known 端點（免 JWT）
 
