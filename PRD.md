@@ -115,18 +115,18 @@
 
 ### 2.1 AllowedQueriesChecker Service
 
-- [ ] `services/allowed-queries.service.ts`：載入 JSON `entries[]`
-- [ ] `checkUnAuthenticatedAccess()` 優先於需 JWT 的流程
-- [ ] `checkAccess()`：JWT 驗證後 bypass AccessChecker
-- [ ] 欄位語意：`path`（含 `/ANY_VALUE` prefix）、`requestType`、`queryParams`（`ANY_VALUE`）、`allowExtraParams`、`allParamsRequired`、`allowUnauthenticatedRequests`
-- [ ] 未設定 `ALLOWED_QUERIES_FILE` → checker 停用
-- [ ] 測試：`tests/allowed-queries.test.ts`（對照 Java 測試案例名稱）
-  - [ ] `validGetPagesQuery` — `?_getpages=A_PAGE_ID`
-  - [ ] `validGetPagesQueryExtraValue` — multi-value `_getpages`
-  - [ ] `validGetPagesQueryExtraParam` — 額外 query param + `allowExtraParams`
-  - [ ] `validUnAuthenticatedQuery`
-  - [ ] `validExactPathMatch` / `validPathWithVariableAnyParamValueMatch`
-  - [ ] 拒絕案例（錯誤 path、缺 param、`allowExtraParams: false` 等，對照 Java 負向測試）
+- [x] `services/allowed-queries.service.ts`：載入 JSON `entries[]`
+- [x] `checkUnAuthenticatedAccess()` 優先於需 JWT 的流程
+- [x] `checkAccess()`：JWT 驗證後 bypass AccessChecker
+- [x] 欄位語意：`path`（含 `/ANY_VALUE` prefix）、`requestType`、`queryParams`（`ANY_VALUE`）、`allowExtraParams`、`allParamsRequired`、`allowUnauthenticatedRequests`
+- [x] 未設定 `ALLOWED_QUERIES_FILE` → checker 停用
+- [x] 測試：`tests/allowed-queries.test.ts`（對照 Java 測試案例名稱）
+  - [x] `validGetPagesQuery` — `?_getpages=A_PAGE_ID`
+  - [x] `validGetPagesQueryExtraValue` — multi-value `_getpages`
+  - [x] `validGetPagesQueryExtraParam` — 額外 query param + `allowExtraParams`
+  - [x] `validUnAuthenticatedQuery`
+  - [x] `validExactPathMatch` / `validPathWithVariableAnyParamValueMatch`
+  - [x] 拒絕案例（錯誤 path、缺 param、`allowExtraParams: false` 等，對照 Java 負向測試）
 
 ---
 
