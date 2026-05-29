@@ -51,8 +51,24 @@ describe("PatientFinderService.findPatientsFromParams", () => {
         expect([...ids]).toEqual(["be92a43f-de46-affa-b131-bbf9eea51140"]);
     });
 
-    it("GET /Encounter/{id} rejects direct resource fetch", () => {
-        expect(() => finder.findPatientsFromParams("Encounter/enc-123", {})).toThrow(InvalidRequestError);
+    it("GET /Encounter/{id}?patient= extracts patient from query", () => {
+        const ids = finder.findPatientsFromParams("Encounter/enc-123", {
+            patient: ["be92a43f-de46-affa-b131-bbf9eea51140"],
+        });
+        expect([...ids]).toEqual(["be92a43f-de46-affa-b131-bbf9eea51140"]);
+    });
+
+    it("GET /Encounter?_id=...&patient= conditional read style search", () => {
+        const ids = finder.findPatientsFromParams("Encounter", {
+            _id: ["enc-123"],
+            patient: ["Patient/be92a43f-de46-affa-b131-bbf9eea51140"],
+        });
+        expect([...ids]).toEqual(["be92a43f-de46-affa-b131-bbf9eea51140"]);
+    });
+
+    it("GET /Encounter/{id} without patient param returns empty set", () => {
+        const ids = finder.findPatientsFromParams("Encounter/enc-123", {});
+        expect(ids.size).toBe(0);
     });
 
     it("blocks chaining search params", () => {
@@ -71,8 +87,9 @@ describe("PatientFinderService.findPatientsFromParams", () => {
         ).toThrow(/_has is blocked/);
     });
 
-    it("rejects when patient cannot be inferred", () => {
-        expect(() => finder.findPatientsFromParams("Observation", {})).toThrow(InvalidRequestError);
+    it("GET /Observation without patient param returns empty set", () => {
+        const ids = finder.findPatientsFromParams("Observation", {});
+        expect(ids.size).toBe(0);
     });
 });
 
@@ -89,6 +106,33 @@ describe("PatientFinderService.findPatientsInBundle", () => {
         const bundle = readPatientFinderBundle("bundle_transaction_get_non_patient_authorized.json");
         const result = finder.findPatientsInBundle(bundle);
         expect(result.referencedPatients).toHaveLength(1);
+        expect([...(result.referencedPatients[0] ?? [])]).toEqual(["be92a43f-de46-affa-b131-bbf9eea51140"]);
+    });
+
+    it("bundle GET read-by-id without patient query returns empty referencedPatients", () => {
+        const bundle: FhirBundle = {
+            resourceType: "Bundle",
+            type: "transaction",
+            entry: [{ request: { method: "GET", url: "Encounter/enc-123" } }],
+        };
+        const result = finder.findPatientsInBundle(bundle);
+        expect(result.referencedPatients).toHaveLength(0);
+    });
+
+    it("bundle GET with resource id and patient query param", () => {
+        const bundle: FhirBundle = {
+            resourceType: "Bundle",
+            type: "transaction",
+            entry: [
+                {
+                    request: {
+                        method: "GET",
+                        url: "Encounter/enc-123?patient=be92a43f-de46-affa-b131-bbf9eea51140",
+                    },
+                },
+            ],
+        };
+        const result = finder.findPatientsInBundle(bundle);
         expect([...(result.referencedPatients[0] ?? [])]).toEqual(["be92a43f-de46-affa-b131-bbf9eea51140"]);
     });
 

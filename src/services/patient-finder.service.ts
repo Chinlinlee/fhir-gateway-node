@@ -80,19 +80,9 @@ export class PatientFinderService {
             return patientIds;
         }
 
-        if (resourceId) {
-            // 禁止非 Patient 的 direct resource fetch（如 Encounter/EID）
-            throw new InvalidRequestError(
-                `Direct resource fetch is only supported for Patient; use search for ${resourceName}`,
-            );
-        }
-
+        // Non-Patient: parse compartment params when present; else empty set (proxy injects later)
         const patientIds = this.checkParamsAndFindPatientIds(resourceName, queryParams);
-        if (!patientIds || patientIds.size === 0) {
-            throw new InvalidRequestError(`Patient ID cannot be found in ${requestPath}`);
-        }
-
-        return patientIds;
+        return patientIds ?? new Set();
     }
 
     findPatientsInBundle(bundle: FhirBundle): BundlePatients {
@@ -353,7 +343,7 @@ export class PatientFinderService {
             }
         }
 
-        if (pathParts.length === 1) {
+        if (pathParts.length >= 1) {
             const queryParams = parseQueryString(parsed.search);
             const patientIds = this.checkParamsAndFindPatientIds(pathParts[0] ?? "", queryParams);
             if (patientIds && patientIds.size > 0) {
@@ -361,7 +351,7 @@ export class PatientFinderService {
             }
         }
 
-        throw new InvalidRequestError(`Patient IDs cannot be found in ${url}`);
+        return new Set();
     }
 
     private isPatientRequestUrl(url: string): boolean {

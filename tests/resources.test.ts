@@ -18,6 +18,12 @@ describe("FHIR static resources", () => {
         expect(data).toBeTypeOf("object");
     });
 
+    it("loads patient_params.json", () => {
+        const data = readResourceJson("patient_params.json") as Record<string, string>;
+        expect(data.Encounter).toBe("patient");
+        expect(data.Observation).toBe("patient");
+    });
+
     it("loads hapi_page_url_allowed_queries.json", () => {
         const data = readResourceJson("hapi_page_url_allowed_queries.json");
         expect(data).toBeTypeOf("object");

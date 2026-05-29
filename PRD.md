@@ -76,6 +76,7 @@
 ### 0.4 靜態資源與常數
 
 - [x] 從 `fhir-gateway/resources` 複製：`CompartmentDefinition-patient.json`、`patient_paths.json`、`hapi_page_url_allowed_queries.json` 等（置於 `src/resources/`）
+- [x] `patient_params.json`：由 `CompartmentDefinition-patient.json` 產生（`scripts/generate-patient-params.mjs`），供 proxy 注入 compartment search param
 - [x] `constants/fhir.ts`：R4、封鎖的 search 修飾（chaining、`_has`、`_include`、`_revinclude`）
 - [x] 測試：資源檔可被載入且 JSON 合法（無 mock）
 
@@ -140,9 +141,9 @@
 - [x] `findPatientsFromParams(path, queryParams)`：
   - [x] `GET /Patient/{id}` → 單一 id
   - [x] `GET /Patient?_id=...` → 逗號分隔多 id
-  - [x] compartment search param 對應（`CompartmentDefinition-patient.json`）
-  - [x] `GET /{ResourceType}/{id}`（非 Patient）→ 拒絕
-  - [x] 無法推斷 → 拒絕
+  - [x] compartment search param 對應（`CompartmentDefinition-patient.json`），例如 `GET /Encounter?patient=123`、`GET /Observation?patient=123`
+  - [x] 非 Patient read/search：有 compartment param 則解析；**無 param 時回傳空集合**（不拒絕 `GET /Encounter/{id}` 等標準 client URL）
+  - [ ] **Proxy（Phase 7）**：無 patient query 時，依 JWT `patient` + `patient_params.json` 注入，例如 `GET /Encounter/enc-123` → `GET /Encounter/enc-123?patient=Patient/456`
 - [x] 硬編碼 `blockJoins=true`：拒絕 chaining、`_has`、`_include`、`_revinclude`
 - [x] `findPatientsInBundle(bundle)`：僅 `type=transaction`；支援 GET/POST/PUT/PATCH/DELETE entries；PATCH 僅 `Binary` + `application/json-patch+json`
 - [x] 輸出結構：`referencedPatients`、`updatedPatients`、`deletedPatients`、`patientsToCreate`（對齊 `BundlePatients`）

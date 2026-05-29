@@ -10,7 +10,8 @@
         "start": "node dist/index.js",
         "test": "vitest run",
         "test:watch": "vitest",
-        "format": "biome format --write"
+        "format": "biome format --write",
+        "generate:patient-params": "node scripts/generate-patient-params.mjs"
     },
     "keywords": [
         "fhir",
