@@ -1,8 +1,9 @@
 /// <reference types="fhir" />
 
-import { Client, type OpPatch } from "fhir-kit-client";
+import type { OpPatch } from "fhir-kit-client";
 
 import { InvalidRequestError } from "../errors/invalid-request.error";
+import { createFhirKitClient, type FhirKitClient } from "../utils/fhir-kit-client.util";
 
 type FhirBackendServiceOptions = {
     baseUrl: string;
@@ -30,14 +31,13 @@ function parseResourcePathOrFail(path: string): ParsedResourcePath {
 }
 
 export class FhirBackendService {
-    private readonly client: Client;
+    private readonly client: FhirKitClient;
 
     constructor(options: FhirBackendServiceOptions) {
-        const clientConfig = {
+        this.client = createFhirKitClient({
             baseUrl: options.baseUrl,
             ...(options.bearerToken ? { bearerToken: options.bearerToken } : {}),
-        };
-        this.client = new Client(clientConfig);
+        });
     }
 
     async getResource(path: string): Promise<fhir4.Bundle> {

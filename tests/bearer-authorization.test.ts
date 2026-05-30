@@ -1,4 +1,5 @@
 import { createServer, type Server } from "node:http";
+import { gunzipSync } from "node:zlib";
 
 import { SignJWT, type CryptoKey } from "jose";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -262,6 +263,14 @@ describe("Bearer authorization proxy flow", () => {
 
         expect(response.status).toBe(200);
         expect(response.headers.get("content-encoding")).toBe("gzip");
+        expect(response.headers.get("content-length")).not.toBeNull();
+
+        const gzipBody = Buffer.from(await response.arrayBuffer());
+        expect(gzipBody[0]).toBe(0x1f);
+        expect(gzipBody[1]).toBe(0x8b);
+        const body = JSON.parse(gunzipSync(gzipBody).toString("utf8")) as { resourceType: string; total: number };
+        expect(body.resourceType).toBe("Bundle");
+        expect(body.total).toBe(1);
     });
 
     it("injects patient query for direct non-Patient read when ACCESS_CHECKER=patient", async () => {

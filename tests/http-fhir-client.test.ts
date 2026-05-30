@@ -7,7 +7,7 @@ import { HttpFhirClientService } from "../src/services/http-fhir-client.service"
 describe("HttpFhirClientService", () => {
     let server: Server;
     let baseUrl = "";
-    let receivedAuthorization = "NOT_CAPTURED";
+    let receivedAuthorization: string | undefined = "NOT_CAPTURED";
     let receivedIfMatch = "";
 
     beforeEach(async () => {
