@@ -1,6 +1,7 @@
 import { request } from "undici";
 
 import type { BackendType } from "../constants/config";
+import { withNoCacheHeaders } from "../utils/http-no-cache.util";
 
 export const RESPONSE_HEADERS_TO_KEEP = new Set<string>([
     "last-modified",
@@ -143,11 +144,13 @@ export class HttpFhirClientService {
 
         if (this.backendType === "GCP") {
             const token = this.getGcpAccessToken ? await this.getGcpAccessToken() : "";
-            headers.Authorization = token.length > 0 ? `Bearer ${token}` : "";
-            return headers;
+            if (token.length > 0) {
+                headers.Authorization = `Bearer ${token}`;
+            }
+            return withNoCacheHeaders(headers);
         }
 
-        headers.Authorization = "";
-        return headers;
+        // HAPI: strip client JWT and omit Authorization header
+        return withNoCacheHeaders(headers);
     }
 }

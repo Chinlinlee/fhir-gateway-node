@@ -2,6 +2,7 @@ import { fetch as undiciFetch } from "undici";
 
 import { StartupConnectionError } from "../errors/startup-connection.error";
 import { formatErrorMessage } from "./format-error.util";
+import { HTTP_NO_CACHE_FETCH_OPTIONS, HTTP_NO_CACHE_HEADERS } from "./http-no-cache.util";
 import { retryWithDelays, startupFetchMaxAttempts } from "./retry.util";
 
 export type HttpFetchFn = typeof undiciFetch;
@@ -11,7 +12,9 @@ export class HttpUtil {
 
     async getText(url: string): Promise<string> {
         const response = await this.fetchFn(url, {
+            ...HTTP_NO_CACHE_FETCH_OPTIONS,
             headers: {
+                ...HTTP_NO_CACHE_HEADERS,
                 "Accept-Charset": "utf-8",
             },
         });

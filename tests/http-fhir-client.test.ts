@@ -9,6 +9,7 @@ describe("HttpFhirClientService", () => {
     let baseUrl = "";
     let receivedAuthorization: string | undefined = "NOT_CAPTURED";
     let receivedIfMatch = "";
+    let receivedCacheControl = "";
 
     beforeEach(async () => {
         server = createServer((req, res) => {
@@ -16,6 +17,7 @@ describe("HttpFhirClientService", () => {
             if (req.method === "GET" && url.pathname === "/fhir/Patient/123" && url.searchParams.get("x") === "1") {
                 receivedAuthorization = req.headers.authorization ?? "";
                 receivedIfMatch = req.headers["if-match"] ?? "";
+                receivedCacheControl = req.headers["cache-control"] ?? "";
                 res.writeHead(200, { etag: "v1", "x-ignore-me": "value" });
                 res.end(JSON.stringify({ resourceType: "Patient", id: "123" }));
                 return;
@@ -64,6 +66,7 @@ describe("HttpFhirClientService", () => {
 
         expect(response.status).toBe(200);
         expect(receivedAuthorization).toBe("");
+        expect(receivedCacheControl).toBe("no-cache, no-store");
         expect(receivedIfMatch).toBe('W/"1"');
         expect(service.responseHeadersToKeep(response.headers).get("etag")).toBe("v1");
         expect(service.responseHeadersToKeep(response.headers).get("x-ignore-me")).toBeNull();

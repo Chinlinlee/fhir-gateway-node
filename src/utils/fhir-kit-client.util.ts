@@ -1,11 +1,10 @@
 import { Client } from "fhir-kit-client";
 
+import { HTTP_NO_CACHE_FETCH_OPTIONS, HTTP_NO_CACHE_HEADERS } from "./http-no-cache.util";
+
 export type FhirKitClient = Client;
 
-export const FHIR_KIT_CLIENT_NO_CACHE_HEADERS = {
-    "Cache-Control": "no-cache, no-store",
-    Pragma: "no-cache",
-} as const;
+export { HTTP_NO_CACHE_HEADERS as FHIR_KIT_CLIENT_NO_CACHE_HEADERS };
 
 export type CreateFhirKitClientOptions = {
     baseUrl: string;
@@ -16,8 +15,8 @@ export type CreateFhirKitClientOptions = {
 export function createFhirKitClient(options: CreateFhirKitClientOptions): Client {
     return new Client({
         baseUrl: options.baseUrl,
-        customHeaders: { ...FHIR_KIT_CLIENT_NO_CACHE_HEADERS },
-        requestOptions: { cache: "no-store" },
+        customHeaders: { ...HTTP_NO_CACHE_HEADERS },
+        requestOptions: { ...HTTP_NO_CACHE_FETCH_OPTIONS },
         ...(options.bearerToken ? { bearerToken: options.bearerToken } : {}),
     });
 }
