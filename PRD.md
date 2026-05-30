@@ -272,8 +272,9 @@
 
 ## Phase 9 — 整合與部署
 
+- [ ] `env.example`：環境變數範例
 - [ ] `README.md`：環境變數、docker-compose 對接、`test-smart` realm + `patient` claim 說明
-- [ ] 與根目錄 `docker-compose.yaml` / `fhir-gateway/docker` 對齊的 e2e 手動驗證步驟
+- [ ] Dockerfile：使用 24-bookworm-slim 作為 base image (builder & runner)
 - [ ] （可選）移植 `fhir-gateway/e2e-test` 關鍵情境為 Node 腳本
 
 ---
