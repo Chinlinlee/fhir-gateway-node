@@ -4,6 +4,7 @@ import type { JWTPayload } from "jose";
 
 import type { AuditUserWho } from "../types/access-decision";
 import type { FhirRequestDetails, FhirRequestMethod } from "../types/fhir-request";
+import { isValidFhirId, isValidFhirResourceType } from "../utils/fhir.util";
 
 type AuditEventBackend = {
     postResource: (resource: fhir4.Resource) => Promise<fhir4.Resource>;
@@ -59,17 +60,68 @@ function toAuditAction(method: FhirRequestMethod, responseStatus: number): "C" |
     }
 }
 
-function extractResourceReference(requestPath: string, contentLocation: string | null): string | null {
-    if (contentLocation) {
-        const normalized = contentLocation.replace(/^https?:\/\/[^/]+\/?/, "");
-        const fhirIndex = normalized.indexOf("/fhir/");
-        if (fhirIndex >= 0) {
-            return normalized.slice(fhirIndex + "/fhir/".length);
-        }
-        return normalized.replace(/^\/+/, "");
+function toValidResourceReference(pathSegment: string): string | null {
+    const parts = pathSegment.split("/").filter((part) => part.length > 0);
+    if (parts.length < 2) {
+        return null;
     }
-    const path = requestPath.replace(/^\/+/, "");
-    return path.length > 0 ? path : null;
+
+    const resourceType = parts[0];
+    const resourceId = parts[1];
+    if (!resourceType || !resourceId || !isValidFhirResourceType(resourceType) || !isValidFhirId(resourceId)) {
+        return null;
+    }
+
+    if (parts.length >= 4 && parts[2] === "_history" && parts[3]) {
+        return `${resourceType}/${resourceId}/_history/${parts[3]}`;
+    }
+
+    return `${resourceType}/${resourceId}`;
+}
+
+function parseReferenceFromContentLocation(contentLocation: string | null): string | null {
+    if (!contentLocation) {
+        return null;
+    }
+
+    const withoutHost = contentLocation.replace(/^https?:\/\/[^/]+/, "");
+    const fhirPathMatch = /(?:^|\/)fhir\/(.+)$/.exec(withoutHost);
+    const pathAfterFhir = fhirPathMatch?.[1] ?? withoutHost.replace(/^\/+/, "");
+    return toValidResourceReference(pathAfterFhir);
+}
+
+function parseReferenceFromRequestPath(requestPath: string): string | null {
+    const normalized = requestPath.replace(/^\/+/, "").replace(/\/+$/, "");
+    return toValidResourceReference(normalized);
+}
+
+function parseReferenceFromResponseBody(responseBody: string): string | null {
+    try {
+        const parsed = JSON.parse(responseBody) as fhir4.Resource;
+        if (
+            parsed.resourceType &&
+            parsed.id &&
+            isValidFhirResourceType(parsed.resourceType) &&
+            isValidFhirId(parsed.id)
+        ) {
+            return `${parsed.resourceType}/${parsed.id}`;
+        }
+    } catch {
+        return null;
+    }
+    return null;
+}
+
+function extractResourceReference(
+    requestPath: string,
+    contentLocation: string | null,
+    responseBody: string,
+): string | null {
+    return (
+        parseReferenceFromContentLocation(contentLocation) ??
+        parseReferenceFromRequestPath(requestPath) ??
+        parseReferenceFromResponseBody(responseBody)
+    );
 }
 
 function buildAgentWho(userWho: AuditUserWho): fhir4.Reference {
@@ -111,6 +163,7 @@ export class AuditEventService {
         const resourceReference = extractResourceReference(
             input.request.requestPath,
             input.responseHeaders.get("content-location"),
+            input.responseBody,
         );
 
         const azp = claimAsString(input.jwtPayload, "azp");
@@ -164,8 +217,6 @@ export class AuditEventService {
                   }
                 : {}),
         };
-
-        console.log(JSON.stringify(auditEvent, null, 2));
 
         await this.backend.postResource(auditEvent);
     }

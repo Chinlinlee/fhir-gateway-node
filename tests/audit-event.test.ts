@@ -127,7 +127,76 @@ describe("AuditEventService", () => {
         expect(auditEvent.subtype?.[0]?.code).toBe("read");
         expect(auditEvent.agent?.[0]?.who?.display).toBe("Dr. Smith");
         expect(auditEvent.source?.observer?.display).toBe("http://gateway/fhir");
-        expect(auditEvent.entity?.[0]?.what?.reference).toContain("Patient/123/_history/1");
+        expect(auditEvent.entity?.[0]?.what?.reference).toBe("Patient/123/_history/1");
+    });
+
+    it("omits entity when request path has no resource id", async () => {
+        const posts: PostCall[] = [];
+        const service = new AuditEventService({
+            postResource: async (resource) => {
+                posts.push({ resource });
+                return resource;
+            },
+        });
+
+        await service.log({
+            request: {
+                requestPath: "Encounter",
+                requestType: "GET",
+                queryParams: {},
+            },
+            responseStatus: 200,
+            responseBody: JSON.stringify({
+                resourceType: "Bundle",
+                type: "searchset",
+                total: 0,
+                entry: [],
+            }),
+            responseHeaders: new Headers(),
+            userWho: {
+                resourceType: "Practitioner",
+                display: "Dr. Smith",
+            },
+            jwtPayload: {} as JWTPayload,
+            gatewayBaseUrl: "http://gateway/fhir",
+            configuredActions: ["R"],
+        });
+
+        expect(posts.length).toBe(1);
+        const auditEvent = posts[0]?.resource as fhir4.AuditEvent;
+        expect(auditEvent.entity).toBeUndefined();
+    });
+
+    it("uses response body id when request path is type-level search", async () => {
+        const posts: PostCall[] = [];
+        const service = new AuditEventService({
+            postResource: async (resource) => {
+                posts.push({ resource });
+                return resource;
+            },
+        });
+
+        await service.log({
+            request: {
+                requestPath: "Patient/789",
+                requestType: "GET",
+                queryParams: {},
+            },
+            responseStatus: 200,
+            responseBody: JSON.stringify({ resourceType: "Patient", id: "789" }),
+            responseHeaders: new Headers(),
+            userWho: {
+                resourceType: "Practitioner",
+                display: "Dr. Smith",
+            },
+            jwtPayload: {} as JWTPayload,
+            gatewayBaseUrl: "http://gateway/fhir",
+            configuredActions: ["R"],
+        });
+
+        expect(posts[0]?.resource).toMatchObject({
+            entity: [{ what: { reference: "Patient/789" } }],
+        });
     });
 
     it("skips logging when action is not configured", async () => {
