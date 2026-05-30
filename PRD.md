@@ -272,9 +272,9 @@
 
 ## Phase 9 — 整合與部署
 
-- [ ] `env.example`：環境變數範例
-- [ ] `README.md`：環境變數、docker-compose 對接、`test-smart` realm + `patient` claim 說明
-- [ ] Dockerfile：使用 24-bookworm-slim 作為 base image (builder & runner)
+- [x] `env.example`：環境變數範例
+- [x] `README.md`：環境變數、docker-compose 對接、`smart` realm + `patient` claim 說明
+- [x] Dockerfile：builder 使用 `node:24-bookworm-slim`、runner 使用 `gcr.io/distroless/nodejs24-debian13`
 - [ ] （可選）移植 `fhir-gateway/e2e-test` 關鍵情境為 Node 腳本
 
 ---
@@ -329,6 +329,6 @@
 | 6 | 完成 |
 | 7 | 完成 |
 | 8 | 完成 |
-| … | … |
+| 9 | 完成（至 Dockerfile；e2e 移植保留可選） |
 
 *完成實作後請將對應 `- [ ]` 改為 `- [x]` 並更新上表。*

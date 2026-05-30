@@ -3,11 +3,11 @@
     "version": "1.0.0",
     "description": "FHIR Information Gateway — Elysia/Node implementation",
     "type": "module",
-    "main": "dist/index.js",
+    "main": "dist/index.cjs",
     "scripts": {
         "dev": "tsx watch src/index.ts",
-        "build": "tsc -p tsconfig.build.json",
-        "start": "node dist/index.js",
+        "build": "tsdown",
+        "start": "node dist/index.cjs",
         "test": "vitest run",
         "test:watch": "vitest",
         "format": "biome format --write",
@@ -39,6 +39,7 @@
         "@elysiajs/eden": "^1.4.9",
         "@types/fhir": "^0.0.43",
         "@types/node": "^25.9.1",
+        "tsdown": "^0.22.1",
         "tsx": "^4.22.3",
         "typescript": "^6.0.3",
         "vitest": "^4.1.7"
