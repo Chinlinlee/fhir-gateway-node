@@ -14,6 +14,7 @@ import type { TokenVerifierService } from "../services/token-verifier.service";
 import { defaultUserWhoFromJwt, type AccessDecision } from "../types/access-decision";
 import type { FhirRequestDetails, FhirRequestMethod } from "../types/fhir-request";
 import type { VerifiedJwt } from "../types/verified-jwt";
+import { applyGzipResponseHeaders, decodeCompressedBody } from "../utils/compression.util";
 import { parseResourcePath } from "../utils/fhir.util";
 import { getPrimaryPatientSearchParam } from "../utils/patient-params.util";
 import { applyRequestMutation } from "../utils/request-mutation.util";
@@ -284,7 +285,11 @@ export abstract class FhirProxyController {
             body: bodyBytes,
         });
 
-        const rawResponseBody = Buffer.from(forwarded.bodyBytes).toString("utf8");
+        const decodedBodyBytes = decodeCompressedBody(
+            forwarded.bodyBytes,
+            forwarded.headers.get("content-encoding"),
+        );
+        const rawResponseBody = Buffer.from(decodedBodyBytes).toString("utf8");
         let responseBody = postProcessResponseBody(
             requestPath,
             rawResponseBody,
@@ -322,8 +327,9 @@ export abstract class FhirProxyController {
         }
 
         if (shouldReturnGzip(request.headers.get("accept-encoding"))) {
-            responseHeaders.set("content-encoding", "gzip");
-            return new Response(await gzipAsync(Buffer.from(responseBody, "utf8")), {
+            const gzipBody = await gzipAsync(Buffer.from(responseBody, "utf8"));
+            applyGzipResponseHeaders(responseHeaders, gzipBody.byteLength);
+            return new Response(gzipBody, {
                 status: forwarded.status,
                 headers: responseHeaders,
             });
