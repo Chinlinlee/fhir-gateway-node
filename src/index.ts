@@ -1,3 +1,4 @@
+import "./load-env";
 import { createApp } from "./app";
 import { loadGatewayConfig } from "./configs";
 import { TokenVerifierService } from "./services/token-verifier.service";
