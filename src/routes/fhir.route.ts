@@ -5,6 +5,7 @@ import { FHIR_API_PREFIX } from "../constants/routes";
 import { FhirProxyController } from "../controllers/fhir-proxy.controller";
 import type { AccessCheckerRegistryService } from "../services/access-checker-registry.service";
 import type { AllowedQueriesCheckerService } from "../services/allowed-queries.service";
+import type { AuditEventService } from "../services/audit-event.service";
 import type { HttpFhirClientService } from "../services/http-fhir-client.service";
 import type { PatientFinderService } from "../services/patient-finder.service";
 import type { TokenVerifierService } from "../services/token-verifier.service";
@@ -16,6 +17,7 @@ export type FhirRouteDeps = {
     allowedQueries: AllowedQueriesCheckerService;
     accessCheckerRegistry: AccessCheckerRegistryService;
     patientFinder: PatientFinderService;
+    auditEventService?: AuditEventService;
 };
 
 export const fhirRoute = (deps: FhirRouteDeps) =>

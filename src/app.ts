@@ -9,6 +9,8 @@ import { wellKnownRoute } from "./routes/well-known.route";
 import type { AccessCheckerRegistryService } from "./services/access-checker-registry.service";
 import { createDefaultAccessCheckerRegistry } from "./services/access-checker-registry.service";
 import { AllowedQueriesCheckerService } from "./services/allowed-queries.service";
+import { AuditEventService } from "./services/audit-event.service";
+import { FhirBackendService } from "./services/fhir-backend.service";
 import { HttpFhirClientService } from "./services/http-fhir-client.service";
 import { PatientFinderService } from "./services/patient-finder.service";
 import type { TokenVerifierService } from "./services/token-verifier.service";
@@ -20,6 +22,7 @@ export type CreateAppOptions = {
     accessCheckerRegistry?: AccessCheckerRegistryService;
     patientFinder?: PatientFinderService;
     httpFhirClient?: HttpFhirClientService;
+    auditEventService?: AuditEventService;
 };
 
 export const createApp = (options?: CreateAppOptions) => {
@@ -45,6 +48,8 @@ export const createApp = (options?: CreateAppOptions) => {
                         proxyTo: options.config.proxyTo,
                         backendType: options.config.backendType,
                     }),
+                auditEventService:
+                    options.auditEventService ?? new AuditEventService(new FhirBackendService({ baseUrl: options.config.proxyTo })),
             }),
         );
     }

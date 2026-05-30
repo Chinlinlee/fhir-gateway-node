@@ -263,10 +263,10 @@
 
 > Java 參考：`AuditEventHelperTest.java`
 
-- [ ] `services/audit-event.service.ts`：`AUDIT_EVENT_ACTIONS_CONFIG` 非空且 `getUserWho()` 存在時產生 `AuditEvent`
-- [ ] HL7 R4 + BALP minimal patterns；agent 欄位來自 JWT `sub`、`azp`、`jti` 等
-- [ ] POST AuditEvent 至同一 FHIR Store；失敗僅 log，不影響 client response
-- [ ] 測試：`tests/audit-event.test.ts` — 對照 `AuditEventHelperTest` + `BearerAuthorizationInterceptorTest` audit 案例
+- [x] `services/audit-event.service.ts`：`AUDIT_EVENT_ACTIONS_CONFIG` 非空且 `getUserWho()` 存在時產生 `AuditEvent`
+- [x] HL7 R4 + BALP minimal patterns；agent 欄位來自 JWT `sub`、`azp`、`jti` 等
+- [x] POST AuditEvent 至同一 FHIR Store；失敗僅 log，不影響 client response
+- [x] 測試：`tests/audit-event.test.ts` — 對照 `AuditEventHelperTest` + `BearerAuthorizationInterceptorTest` audit 案例
 
 ---
 
@@ -326,7 +326,8 @@
 | 4 | 完成 |
 | 5 | 完成 |
 | 6 | 完成 |
-| 7 | 7.1 完成、7.2 部分完成（GCP 待補）、7.3 部分完成（Audit 待 Phase 8） |
+| 7 | 7.1 完成、7.2 部分完成（GCP 待補）、7.3 完成 |
+| 8 | 完成 |
 | … | … |
 
 *完成實作後請將對應 `- [ ]` 改為 `- [x]` 並更新上表。*

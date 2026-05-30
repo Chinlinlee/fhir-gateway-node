@@ -7,10 +7,11 @@ import { InvalidRequestError } from "../errors/invalid-request.error";
 import type { AccessCheckerRegistryService } from "../services/access-checker-registry.service";
 import { PATIENT_CLAIM } from "../services/access-checkers/patient-access-checker.service";
 import type { AllowedQueriesCheckerService } from "../services/allowed-queries.service";
+import type { AuditEventService } from "../services/audit-event.service";
 import type { HttpFhirClientService } from "../services/http-fhir-client.service";
 import type { PatientFinderService } from "../services/patient-finder.service";
 import type { TokenVerifierService } from "../services/token-verifier.service";
-import type { AccessDecision } from "../types/access-decision";
+import { defaultUserWhoFromJwt, type AccessDecision } from "../types/access-decision";
 import type { FhirRequestDetails, FhirRequestMethod } from "../types/fhir-request";
 import type { VerifiedJwt } from "../types/verified-jwt";
 import { parseResourcePath } from "../utils/fhir.util";
@@ -24,6 +25,7 @@ type FhirProxyControllerDeps = {
     allowedQueries: AllowedQueriesCheckerService;
     accessCheckerRegistry: AccessCheckerRegistryService;
     patientFinder: PatientFinderService;
+    auditEventService?: AuditEventService;
 };
 
 const gzipAsync = promisify(gzip);
@@ -152,13 +154,14 @@ function postProcessResponseBody(
     responseBody: string,
     accessDecision: AccessDecision,
     requestDetails: FhirRequestDetails,
+    responseStatus: number,
 ): string {
     let body = responseBody;
     if (requestPath === "metadata") {
         body = enrichCapabilityStatementSecurity(body);
     }
     try {
-        const postProcessed = accessDecision.postProcess?.(requestDetails, { status: 200, body });
+        const postProcessed = accessDecision.postProcess?.(requestDetails, { status: responseStatus, body });
         if (typeof postProcessed === "string") {
             return postProcessed;
         }
@@ -185,6 +188,7 @@ export abstract class FhirProxyController {
 
         let accessDecision: AccessDecision;
         let verifiedJwtPatientClaim: string | undefined;
+        let verifiedJwtPayload: VerifiedJwt["payload"] | undefined;
 
         if (requestPath === "metadata") {
             accessDecision = {
@@ -217,6 +221,7 @@ export abstract class FhirProxyController {
 
                 const jwtPatientClaim = verifiedJwt.payload[PATIENT_CLAIM];
                 verifiedJwtPatientClaim = typeof jwtPatientClaim === "string" ? jwtPatientClaim : undefined;
+                verifiedJwtPayload = verifiedJwt.payload;
                 queryParams = maybeInjectPatientParam(
                     deps.config,
                     requestPath,
@@ -265,13 +270,40 @@ export abstract class FhirProxyController {
         });
 
         const rawResponseBody = Buffer.from(forwarded.bodyBytes).toString("utf8");
-        let responseBody = postProcessResponseBody(requestPath, rawResponseBody, accessDecision, mutationRequest);
+        let responseBody = postProcessResponseBody(
+            requestPath,
+            rawResponseBody,
+            accessDecision,
+            mutationRequest,
+            forwarded.status,
+        );
         const gatewayBaseUrl = `${url.origin}${fhirPrefix}`;
         responseBody = replaceProxyBaseUrl(responseBody, deps.config.proxyTo, gatewayBaseUrl);
 
         const responseHeaders = deps.httpFhirClient.responseHeadersToKeep(forwarded.headers);
         if (!responseHeaders.has("content-type")) {
             responseHeaders.set("content-type", "application/json; charset=UTF-8");
+        }
+
+        const auditUserWho =
+            accessDecision.getUserWho?.(mutationRequest) ??
+            (verifiedJwtPayload ? defaultUserWhoFromJwt(verifiedJwtPayload) : null);
+        if (deps.auditEventService && deps.config.auditEventActions.length > 0 && auditUserWho && verifiedJwtPayload) {
+            try {
+                await deps.auditEventService.log({
+                    request: mutationRequest,
+                    responseStatus: forwarded.status,
+                    responseBody,
+                    responseHeaders,
+                    userWho: auditUserWho,
+                    jwtPayload: verifiedJwtPayload,
+                    gatewayBaseUrl,
+                    configuredActions: deps.config.auditEventActions,
+                });
+            } catch (error) {
+                // Audit 失敗不應影響主流程 / Audit failure must not affect client response
+                console.error(error);
+            }
         }
 
         if (shouldReturnGzip(request.headers.get("accept-encoding"))) {
