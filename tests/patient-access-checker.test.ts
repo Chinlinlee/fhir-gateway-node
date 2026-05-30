@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 
+import { AuthenticationError } from "../src/errors/authentication.error";
 import { InvalidRequestError } from "../src/errors/invalid-request.error";
 import {
     PATIENT_CLAIM,
     PatientAccessCheckerService,
     SCOPES_CLAIM,
+    patientAccessCheckerFactory,
 } from "../src/services/access-checkers/patient-access-checker.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import {
@@ -25,6 +27,12 @@ function createPatientChecker(scopesClaim = DEFAULT_TEST_SCOPES_CLAIM): PatientA
     const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
     const smartScopeChecker = new SmartScopeChecker(scopes, SmartScopePrincipal.PATIENT);
     return new PatientAccessCheckerService(PATIENT_AUTHORIZED, PatientFinderService.getInstance(), smartScopeChecker);
+}
+
+function createUserScopeChecker(scopesClaim: string): PatientAccessCheckerService {
+    const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
+    const smartScopeChecker = new SmartScopeChecker(scopes, SmartScopePrincipal.USER);
+    return new PatientAccessCheckerService(null, PatientFinderService.getInstance(), smartScopeChecker);
 }
 
 function bundleBody(name: string): string {
@@ -309,5 +317,59 @@ describe("PatientAccessCheckerService", () => {
     it("uses patient claim not patient_id", () => {
         expect(PATIENT_CLAIM).toBe("patient");
         expect(SCOPES_CLAIM).toBe("scope");
+    });
+
+    it("factory accepts user scopes without patient claim", () => {
+        const checker = patientAccessCheckerFactory.create({
+            jwt: {
+                payload: { scope: "user/Observation.rs" },
+                protectedHeader: { alg: "RS256" },
+            },
+            patientFinder: PatientFinderService.getInstance(),
+        });
+
+        expect(
+            checker
+                .checkAccess(buildFhirRequest("Observation", { subject: [PATIENT_NON_AUTHORIZED] }))
+                .canAccess(),
+        ).toBe(true);
+    });
+
+    it("factory accepts system scopes without patient claim", () => {
+        const checker = patientAccessCheckerFactory.create({
+            jwt: {
+                payload: { scope: "system/*.rs" },
+                protectedHeader: { alg: "RS256" },
+            },
+            patientFinder: PatientFinderService.getInstance(),
+        });
+
+        expect(checker.checkAccess(buildFhirRequest("Observation")).canAccess()).toBe(true);
+    });
+
+    it("factory still requires patient claim for patient scopes", () => {
+        expect(() =>
+            patientAccessCheckerFactory.create({
+                jwt: {
+                    payload: { scope: "patient/Observation.rs" },
+                    protectedHeader: { alg: "RS256" },
+                },
+                patientFinder: PatientFinderService.getInstance(),
+            }),
+        ).toThrow(AuthenticationError);
+    });
+
+    it("user scopes skip patient compartment restriction", () => {
+        expect(
+            createUserScopeChecker("user/Observation.rs")
+                .checkAccess(buildFhirRequest(`Patient/${PATIENT_NON_AUTHORIZED}`))
+                .canAccess(),
+        ).toBe(false);
+
+        expect(
+            createUserScopeChecker("user/*.rs")
+                .checkAccess(buildFhirRequest(`Patient/${PATIENT_NON_AUTHORIZED}`))
+                .canAccess(),
+        ).toBe(true);
     });
 });

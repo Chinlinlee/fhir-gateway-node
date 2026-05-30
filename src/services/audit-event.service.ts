@@ -165,6 +165,8 @@ export class AuditEventService {
                 : {}),
         };
 
+        console.log(JSON.stringify(auditEvent, null, 2));
+
         await this.backend.postResource(auditEvent);
     }
 }

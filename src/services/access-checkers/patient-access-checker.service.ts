@@ -7,10 +7,12 @@ import type {
 import type { AccessDecision } from "../../types/access-decision";
 import type { FhirBundleEntry } from "../../types/fhir-bundle";
 import type { FhirRequestDetails } from "../../types/fhir-request";
+import { AuthenticationError } from "../../errors/authentication.error";
 import { getResourceIdOrNull, isSameResourceType, parseResourcePath } from "../../utils/fhir.util";
 import { getJwtClaimIdOrFail, getJwtClaimOrFail } from "../../utils/jwt-claim.util";
 import {
     extractSmartFhirScopesFromTokens,
+    resolveSmartScopePrincipal,
     SmartScopeChecker,
     SmartScopePermission,
     SmartScopePrincipal,
@@ -21,11 +23,15 @@ export const PATIENT_CLAIM = "patient";
 export const SCOPES_CLAIM = "scope";
 
 export class PatientAccessCheckerService implements AccessChecker {
-    private readonly authorizedPatientId: string;
+    private readonly authorizedPatientId: string | null;
     private readonly patientFinder: PatientFinderLike;
     private readonly smartScopeChecker: SmartScopeChecker;
 
-    constructor(authorizedPatientId: string, patientFinder: PatientFinderLike, smartScopeChecker: SmartScopeChecker) {
+    constructor(
+        authorizedPatientId: string | null,
+        patientFinder: PatientFinderLike,
+        smartScopeChecker: SmartScopeChecker,
+    ) {
         this.authorizedPatientId = authorizedPatientId;
         this.patientFinder = patientFinder;
         this.smartScopeChecker = smartScopeChecker;
@@ -71,10 +77,19 @@ export class PatientAccessCheckerService implements AccessChecker {
     }
 
     private validatePatientIds(patientIds: ReadonlySet<string>): boolean {
+        if (this.authorizedPatientId === null) {
+            return true;
+        }
         return patientIds.size === 1 && patientIds.has(this.authorizedPatientId);
     }
 
     private processRead(request: FhirRequestDetails, resourceName: string): AccessDecision {
+        if (this.authorizedPatientId === null) {
+            return grantedAccessDecision(
+                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.READ),
+            );
+        }
+
         const patientIds = isSameResourceType(resourceName, "Patient")
             ? this.patientFinder.findPatientsForAccessCheck(request.requestPath, request.queryParams)
             : this.patientFinder.findPatientsFromParams(request.requestPath, request.queryParams);
@@ -85,6 +100,12 @@ export class PatientAccessCheckerService implements AccessChecker {
     }
 
     private processSearch(request: FhirRequestDetails, resourceName: string): AccessDecision {
+        if (this.authorizedPatientId === null) {
+            return grantedAccessDecision(
+                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.SEARCH),
+            );
+        }
+
         const patientIds = this.patientFinder.findPatientsForAccessCheck(request.requestPath, request.queryParams);
         return grantedAccessDecision(
             this.validatePatientIds(patientIds) &&
@@ -108,6 +129,12 @@ export class PatientAccessCheckerService implements AccessChecker {
         }
 
         const patientIds = this.patientFinder.findPatientsInResource(request.requestPath, body);
+        if (this.authorizedPatientId === null) {
+            return grantedAccessDecision(
+                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.CREATE),
+            );
+        }
+
         return grantedAccessDecision(
             patientIds.has(this.authorizedPatientId) &&
                 this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.CREATE),
@@ -143,6 +170,12 @@ export class PatientAccessCheckerService implements AccessChecker {
         }
 
         const patientIds = this.patientFinder.findPatientsForAccessCheck(request.requestPath, request.queryParams);
+        if (this.authorizedPatientId === null) {
+            return grantedAccessDecision(
+                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.DELETE),
+            );
+        }
+
         return grantedAccessDecision(
             this.validatePatientIds(patientIds) &&
                 this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.DELETE),
@@ -154,6 +187,12 @@ export class PatientAccessCheckerService implements AccessChecker {
         resourceName: string,
         updateMethod: "PUT" | "PATCH",
     ): AccessDecision {
+        if (this.authorizedPatientId === null) {
+            return grantedAccessDecision(
+                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.UPDATE),
+            );
+        }
+
         const referencedPatientIds = this.patientFinder.findPatientsForAccessCheck(
             request.requestPath,
             request.queryParams,
@@ -194,6 +233,12 @@ export class PatientAccessCheckerService implements AccessChecker {
             return deniedAccessDecision();
         }
 
+        if (this.authorizedPatientId === null) {
+            return grantedAccessDecision(
+                this.smartScopeChecker.hasPermission("Patient", SmartScopePermission.UPDATE),
+            );
+        }
+
         return grantedAccessDecision(
             this.authorizedPatientId === patientId &&
                 this.smartScopeChecker.hasPermission("Patient", SmartScopePermission.UPDATE),
@@ -204,6 +249,15 @@ export class PatientAccessCheckerService implements AccessChecker {
         const bundle = parseRequestBundle(request);
         if (!bundle) {
             return deniedAccessDecision();
+        }
+
+        if (this.authorizedPatientId === null) {
+            for (const entry of bundle.entry ?? []) {
+                if (!this.doesBundleElementHavePermission(entry)) {
+                    return deniedAccessDecision();
+                }
+            }
+            return grantedAccessDecision(true);
         }
 
         const patientsInBundle = this.patientFinder.findPatientsInBundle(bundle, { strict: true });
@@ -299,16 +353,28 @@ export class PatientAccessCheckerService implements AccessChecker {
     }
 }
 
-function createSmartScopeCheckerFromJwt(context: AccessCheckerCreateContext): SmartScopeChecker {
-    const scopesClaim = getJwtClaimOrFail(context.jwt.payload, SCOPES_CLAIM);
+function createSmartScopeCheckerFromJwt(
+    scopesClaim: string,
+    scopePrincipal: SmartScopePrincipal,
+): SmartScopeChecker {
     const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
-    return new SmartScopeChecker(scopes, SmartScopePrincipal.PATIENT);
+    return new SmartScopeChecker(scopes, scopePrincipal);
 }
 
 export const patientAccessCheckerFactory: AccessCheckerFactory = {
     create(context: AccessCheckerCreateContext): AccessChecker {
-        const authorizedPatientId = getJwtClaimIdOrFail(context.jwt.payload, PATIENT_CLAIM);
-        const smartScopeChecker = createSmartScopeCheckerFromJwt(context);
+        const scopesClaim = getJwtClaimOrFail(context.jwt.payload, SCOPES_CLAIM);
+        const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
+        const scopePrincipal = resolveSmartScopePrincipal(scopes);
+        if (!scopePrincipal) {
+            throw new AuthenticationError("No SMART FHIR scopes found in JWT scope claim");
+        }
+
+        const authorizedPatientId =
+            scopePrincipal === SmartScopePrincipal.PATIENT
+                ? getJwtClaimIdOrFail(context.jwt.payload, PATIENT_CLAIM)
+                : null;
+        const smartScopeChecker = createSmartScopeCheckerFromJwt(scopesClaim, scopePrincipal);
         return new PatientAccessCheckerService(authorizedPatientId, context.patientFinder, smartScopeChecker);
     },
 };

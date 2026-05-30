@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     ALL_RESOURCE_TYPES_WILDCARD,
     extractSmartFhirScopesFromTokens,
+    resolveSmartScopePrincipal,
     SmartScopeChecker,
     SmartScopePermission,
     SmartScopePrincipal,
@@ -129,6 +130,27 @@ describe("extractSmartFhirScopesFromTokens", () => {
         expect(() => extractSmartFhirScopesFromTokens(["patient/NotARealResource.read"])).toThrow(
             "Invalid resource type NotARealResource",
         );
+    });
+});
+
+describe("resolveSmartScopePrincipal", () => {
+    it("prefers patient over user and system", () => {
+        const scopes = extractSmartFhirScopesFromTokens(["patient/Observation.rs", "user/*.rs", "system/*.rs"]);
+        expect(resolveSmartScopePrincipal(scopes)).toBe(SmartScopePrincipal.PATIENT);
+    });
+
+    it("returns user when only user scopes are present", () => {
+        const scopes = extractSmartFhirScopesFromTokens(["user/Observation.rs"]);
+        expect(resolveSmartScopePrincipal(scopes)).toBe(SmartScopePrincipal.USER);
+    });
+
+    it("returns system when only system scopes are present", () => {
+        const scopes = extractSmartFhirScopesFromTokens(["system/*.rs"]);
+        expect(resolveSmartScopePrincipal(scopes)).toBe(SmartScopePrincipal.SYSTEM);
+    });
+
+    it("returns null when no FHIR scopes are present", () => {
+        expect(resolveSmartScopePrincipal(extractSmartFhirScopesFromTokens(["openid", "launch/patient"]))).toBeNull();
     });
 });
 
