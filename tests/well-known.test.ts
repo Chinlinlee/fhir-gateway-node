@@ -17,6 +17,7 @@ describe("GET /fhir/.well-known/smart-configuration", () => {
             tokenIssuer: server.issuerUrl,
             wellKnownEndpoint: server.wellKnownPath,
             runMode: "PROD",
+            allowTokenIssuerHostMismatch: false,
         });
         app = createApp({ tokenVerifier });
     });

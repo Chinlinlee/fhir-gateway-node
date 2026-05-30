@@ -67,6 +67,29 @@ describe("loadGatewayConfig", () => {
         expect(loadGatewayConfig(env).runMode).toBe("PROD");
     });
 
+    it("defaults ALLOW_TOKEN_ISSUER_HOST_MISMATCH to false", () => {
+        const config = loadGatewayConfig(minimalValidEnv());
+        expect(config.allowTokenIssuerHostMismatch).toBe(false);
+    });
+
+    it("parses ALLOW_TOKEN_ISSUER_HOST_MISMATCH", () => {
+        const enabled = loadGatewayConfig(
+            minimalValidEnv({ ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "true" }),
+        );
+        expect(enabled.allowTokenIssuerHostMismatch).toBe(true);
+
+        const disabled = loadGatewayConfig(
+            minimalValidEnv({ ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "off" }),
+        );
+        expect(disabled.allowTokenIssuerHostMismatch).toBe(false);
+    });
+
+    it("throws on invalid ALLOW_TOKEN_ISSUER_HOST_MISMATCH", () => {
+        expect(() =>
+            loadGatewayConfig(minimalValidEnv({ ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "maybe" })),
+        ).toThrow(/ALLOW_TOKEN_ISSUER_HOST_MISMATCH/);
+    });
+
     it("reads WELL_KNOWN_ENDPOINT from environment", () => {
         const config = loadGatewayConfig(
             minimalValidEnv({

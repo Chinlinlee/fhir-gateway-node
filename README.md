@@ -28,7 +28,8 @@ cp env.example .env
 
 常用選填：
 
-- `RUN_MODE`：`PROD`（預設）或 `DEV`
+- `RUN_MODE`：`PROD`（預設）或 `DEV`（容忍 JWT `iss` 與 `TOKEN_ISSUER` 不同）
+- `ALLOW_TOKEN_ISSUER_HOST_MISMATCH`：`true` 時，PROD 下允許 JWT `iss` 的 host 與 `TOKEN_ISSUER` 不同、但 realm path 相同（預設 `false`）
 - `PORT`：HTTP listen port（預設 `3000`）
 - `WELL_KNOWN_ENDPOINT`：預設 `.well-known/openid-configuration`
 - `ALLOWED_QUERIES_FILE`：Allowed Queries JSON 檔案路徑

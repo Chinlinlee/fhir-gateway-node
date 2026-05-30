@@ -8,7 +8,11 @@ export const ENV_KEYS = {
     WELL_KNOWN_ENDPOINT: "WELL_KNOWN_ENDPOINT",
     RUN_MODE: "RUN_MODE",
     PORT: "PORT",
+    /** When true, JWT iss may differ from TOKEN_ISSUER host if realm path matches. */
+    ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "ALLOW_TOKEN_ISSUER_HOST_MISMATCH",
 } as const;
+
+export const DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH = false;
 
 export const DEFAULT_WELL_KNOWN_ENDPOINT = ".well-known/openid-configuration";
 export const DEFAULT_RUN_MODE = "PROD";

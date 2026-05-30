@@ -1,16 +1,16 @@
-import { z } from "zod";
+import type { AuditEventActionCode, BackendType, RunMode } from "../constants/config";
+
 import {
     AUDIT_EVENT_ACTION_CODES,
     BUILTIN_ACCESS_CHECKERS,
+    DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH,
     DEFAULT_PORT,
     DEFAULT_RUN_MODE,
     DEFAULT_WELL_KNOWN_ENDPOINT,
     ENV_KEYS,
-    type AuditEventActionCode,
-    type BackendType,
-    type RunMode,
 } from "../constants/config";
-import { GatewayConfigSchema, type GatewayConfig } from "./env.schema";
+import type { GatewayConfig } from "./env.schema";
+import { GatewayConfigSchema } from "./env.schema";
 
 export class ConfigError extends Error {
     constructor(message: string) {
@@ -59,6 +59,22 @@ function parseBackendType(raw: string): BackendType {
     throw new ConfigError(`The environment variable ${ENV_KEYS.BACKEND_TYPE} is not set to either GCP or HAPI!`);
 }
 
+function parseBooleanEnv(raw: string | undefined, envKey: string, defaultValue: boolean): boolean {
+    if (raw === undefined || raw.trim().length === 0) {
+        return defaultValue;
+    }
+
+    const normalized = raw.trim().toLowerCase();
+    if (normalized === "true" || normalized === "1" || normalized === "yes" || normalized === "on") {
+        return true;
+    }
+    if (normalized === "false" || normalized === "0" || normalized === "no" || normalized === "off") {
+        return false;
+    }
+
+    throw new ConfigError(`The environment variable ${envKey} must be true/false (got: ${raw})`);
+}
+
 function parseRunMode(raw: string | undefined): RunMode {
     const value = (raw?.trim().toUpperCase() ?? DEFAULT_RUN_MODE) as RunMode;
     if (value === "DEV" || value === "PROD") {
@@ -91,6 +107,11 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
     const backendType = parseBackendType(requireEnv(env, ENV_KEYS.BACKEND_TYPE));
     const accessChecker = requireEnv(env, ENV_KEYS.ACCESS_CHECKER).trim();
     const runMode = parseRunMode(env[ENV_KEYS.RUN_MODE]);
+    const allowTokenIssuerHostMismatch = parseBooleanEnv(
+        env[ENV_KEYS.ALLOW_TOKEN_ISSUER_HOST_MISMATCH],
+        ENV_KEYS.ALLOW_TOKEN_ISSUER_HOST_MISMATCH,
+        DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH,
+    );
 
     validateAccessChecker(accessChecker, runMode);
 
@@ -114,6 +135,7 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
         auditEventActions,
         wellKnownEndpoint,
         runMode,
+        allowTokenIssuerHostMismatch,
         port,
         ...(allowedQueriesFile ? { allowedQueriesFile } : {}),
     };
@@ -147,3 +169,4 @@ export function minimalValidEnv(overrides: Partial<Record<string, string>> = {})
 }
 
 export { BUILTIN_ACCESS_CHECKERS };
+

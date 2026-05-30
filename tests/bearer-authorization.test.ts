@@ -29,6 +29,7 @@ function createBaseConfig(overrides: Partial<GatewayConfig>): GatewayConfig {
         auditEventActions: [],
         wellKnownEndpoint: "test",
         runMode: "PROD",
+        allowTokenIssuerHostMismatch: false,
         port: 3000,
         ...overrides,
     };
@@ -140,6 +141,7 @@ describe("Bearer authorization proxy flow", () => {
             tokenIssuer: issuer.issuerUrl,
             wellKnownEndpoint: issuer.wellKnownPath,
             runMode: "PROD",
+            allowTokenIssuerHostMismatch: false,
         });
     });
 

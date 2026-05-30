@@ -15,6 +15,7 @@ describe("TokenVerifierService", () => {
             tokenIssuer: server.issuerUrl,
             wellKnownEndpoint: server.wellKnownPath,
             runMode: "PROD",
+            allowTokenIssuerHostMismatch: false,
         });
     });
 
@@ -65,6 +66,29 @@ describe("TokenVerifierService", () => {
         expect(verifier.getWellKnownConfig()).toBe(server.wellKnownConfig);
     });
 
+    it("rejects issuer host mismatch in PROD when ALLOW_TOKEN_ISSUER_HOST_MISMATCH is false", async () => {
+        const configured = new URL(server.issuerUrl);
+        const altIssuer = `http://issuer-alias.example:${configured.port}`;
+        const token = await signTestJwt(altIssuer, server.keys.privateKey);
+        await expect(verifier.decodeAndVerifyBearerToken(`Bearer ${token}`)).rejects.toBeInstanceOf(
+            AuthenticationError,
+        );
+    });
+
+    it("allows issuer host mismatch in PROD when ALLOW_TOKEN_ISSUER_HOST_MISMATCH is true", async () => {
+        const relaxedVerifier = await TokenVerifierService.create({
+            tokenIssuer: server.issuerUrl,
+            wellKnownEndpoint: server.wellKnownPath,
+            runMode: "PROD",
+            allowTokenIssuerHostMismatch: true,
+        });
+        const configured = new URL(server.issuerUrl);
+        const altIssuer = `http://issuer-alias.example:${configured.port}`;
+        const token = await signTestJwt(altIssuer, server.keys.privateKey);
+        const verified = await relaxedVerifier.decodeAndVerifyBearerToken(`Bearer ${token}`);
+        expect(verified.payload.iss).toBe(altIssuer);
+    });
+
     it("allows issuer mismatch when RUN_MODE is DEV", async () => {
         await server.close();
         server = await startIssuerTestServer("test");
@@ -72,6 +96,7 @@ describe("TokenVerifierService", () => {
             tokenIssuer: server.issuerUrl,
             wellKnownEndpoint: server.wellKnownPath,
             runMode: "DEV",
+            allowTokenIssuerHostMismatch: false,
         });
         const altIssuer = `${server.issuerUrl}/emulator`;
         const token = await signTestJwt(altIssuer, server.keys.privateKey);

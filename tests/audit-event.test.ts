@@ -30,6 +30,7 @@ function baseConfig(overrides: Partial<GatewayConfig>): GatewayConfig {
         auditEventActions: ["R"],
         wellKnownEndpoint: "test",
         runMode: "PROD",
+        allowTokenIssuerHostMismatch: false,
         port: 3000,
         ...overrides,
     };
@@ -182,6 +183,7 @@ describe("Audit event proxy integration", () => {
             tokenIssuer: issuer.issuerUrl,
             wellKnownEndpoint: issuer.wellKnownPath,
             runMode: "PROD",
+            allowTokenIssuerHostMismatch: false,
         });
         const app = createApp({
             tokenVerifier,
@@ -214,6 +216,7 @@ describe("Audit event proxy integration", () => {
             tokenIssuer: issuer.issuerUrl,
             wellKnownEndpoint: issuer.wellKnownPath,
             runMode: "PROD",
+            allowTokenIssuerHostMismatch: false,
         });
         const app = createApp({
             tokenVerifier,

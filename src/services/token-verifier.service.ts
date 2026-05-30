@@ -10,7 +10,19 @@ import type { VerifiedJwt } from "../types/verified-jwt";
 import { HttpUtil } from "../utils/http.util";
 import { IssuerMetadataSchema } from "../validations/issuer-metadata.schema";
 
-type TokenVerifierConfig = Pick<GatewayConfig, "tokenIssuer" | "wellKnownEndpoint" | "runMode">;
+type TokenVerifierConfig = Pick<
+    GatewayConfig,
+    "tokenIssuer" | "wellKnownEndpoint" | "runMode" | "allowTokenIssuerHostMismatch"
+>;
+
+function normalizeIssuerPath(issuerUrl: string): string {
+    try {
+        const pathname = new URL(issuerUrl).pathname.replace(/\/+$/, "");
+        return pathname.length > 0 ? pathname : "/";
+    } catch {
+        return issuerUrl;
+    }
+}
 
 /**
  * Verifies OAuth 2.0 Bearer JWT (RS256 + Keycloak public_key).
@@ -20,12 +32,20 @@ export class TokenVerifierService {
     private readonly wellKnownConfigJson: string;
     private readonly publicKey: KeyObject;
     private readonly devMode: boolean;
+    private readonly allowTokenIssuerHostMismatch: boolean;
 
-    private constructor(tokenIssuer: string, wellKnownConfigJson: string, publicKey: KeyObject, devMode: boolean) {
+    private constructor(
+        tokenIssuer: string,
+        wellKnownConfigJson: string,
+        publicKey: KeyObject,
+        devMode: boolean,
+        allowTokenIssuerHostMismatch: boolean,
+    ) {
         this.tokenIssuer = tokenIssuer;
         this.wellKnownConfigJson = wellKnownConfigJson;
         this.publicKey = publicKey;
         this.devMode = devMode;
+        this.allowTokenIssuerHostMismatch = allowTokenIssuerHostMismatch;
     }
 
     static async create(
@@ -39,7 +59,13 @@ export class TokenVerifierService {
             ENV_KEYS.TOKEN_ISSUER,
         );
 
-        return new TokenVerifierService(config.tokenIssuer, wellKnownConfigJson, publicKey, config.runMode === "DEV");
+        return new TokenVerifierService(
+            config.tokenIssuer,
+            wellKnownConfigJson,
+            publicKey,
+            config.runMode === "DEV",
+            config.allowTokenIssuerHostMismatch,
+        );
     }
 
     getWellKnownConfig(): string {
@@ -90,24 +116,45 @@ export class TokenVerifierService {
         }
     }
 
-    private buildVerifyOptions(issuer: string): JWTVerifyOptions {
-        if (issuer !== this.tokenIssuer) {
-            if (this.devMode) {
-                // DEV: Android emulator may use a different issuer URL / DEV 模式容忍 issuer 與設定不同
-                console.warn("Server run in DEV mode. Setting issuer to issuer from request.");
-                return {
-                    issuer,
-                    algorithms: [SIGN_ALGORITHM],
-                };
-            }
-
-            throw new AuthenticationError(`The token issuer ${issuer} does not match the expected token issuer`);
-        }
-
+    private buildVerifyOptions(jwtIssuer: string): JWTVerifyOptions {
+        const verifyIssuer = this.resolveVerifyIssuer(jwtIssuer);
         return {
-            issuer: this.tokenIssuer,
+            issuer: verifyIssuer,
             algorithms: [SIGN_ALGORITHM],
         };
+    }
+
+    /**
+     * 決定 jwtVerify 使用的 issuer。
+     * PROD 需 ALLOW_TOKEN_ISSUER_HOST_MISMATCH=true 才接受 host 不同、realm path 相同。
+     */
+    private resolveVerifyIssuer(jwtIssuer: string): string {
+        if (jwtIssuer === this.tokenIssuer) {
+            return this.tokenIssuer;
+        }
+
+        if (this.devMode) {
+            // DEV: Android emulator may use a different issuer URL / DEV 模式容忍 issuer 與設定不同
+            console.warn(
+                `RUN_MODE=DEV: JWT iss=${jwtIssuer} differs from TOKEN_ISSUER=${this.tokenIssuer}; verifying with token iss`,
+            );
+            return jwtIssuer;
+        }
+
+        if (this.allowTokenIssuerHostMismatch) {
+            const configuredPath = normalizeIssuerPath(this.tokenIssuer);
+            const jwtPath = normalizeIssuerPath(jwtIssuer);
+            if (configuredPath === jwtPath) {
+                console.warn(
+                    `ALLOW_TOKEN_ISSUER_HOST_MISMATCH: iss=${jwtIssuer}, TOKEN_ISSUER=${this.tokenIssuer}; verifying with token iss (realm path ${configuredPath})`,
+                );
+                return jwtIssuer;
+            }
+        }
+
+        throw new AuthenticationError(
+            `The token issuer ${jwtIssuer} does not match the expected token issuer ${this.tokenIssuer}`,
+        );
     }
 
     private static async fetchAndDecodePublicKey(tokenIssuer: string, httpUtil: HttpUtil): Promise<KeyObject> {

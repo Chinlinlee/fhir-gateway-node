@@ -205,6 +205,9 @@ export abstract class FhirProxyController {
             } else {
                 const authHeader = request.headers.get("authorization");
                 if (!authHeader) {
+                    console.error(
+                        `[fhir-proxy] 401 ${method} ${requestPath}: missing Authorization header`,
+                    );
                     return createOperationOutcome(401, "login", "No Authorization header provided!");
                 }
 
@@ -216,6 +219,7 @@ export abstract class FhirProxyController {
                         error instanceof AuthenticationError || error instanceof Error
                             ? error.message
                             : "JWT verification failed";
+                    console.error(`[fhir-proxy] 401 ${method} ${requestPath}: ${diagnostics}`);
                     return createOperationOutcome(401, "login", diagnostics);
                 }
 
@@ -244,13 +248,24 @@ export abstract class FhirProxyController {
                         checkerDecision = checker.checkAccess(authenticatedRequest);
                     } catch (error) {
                         if (error instanceof InvalidRequestError) {
+                            console.error(
+                                `[fhir-proxy] 400 ${method} ${requestPath}: ${error.message}`,
+                            );
                             return createOperationOutcome(400, "forbidden", error.message);
                         }
                         const diagnostics =
-                            error instanceof Error ? error.message : "Access checker initialization failed";
+                            error instanceof AuthenticationError
+                                ? error.message
+                                : error instanceof Error
+                                  ? error.message
+                                  : "Access checker initialization failed";
+                        console.error(`[fhir-proxy] 401 ${method} ${requestPath}: ${diagnostics}`);
                         return createOperationOutcome(401, "login", diagnostics);
                     }
                     if (!checkerDecision.canAccess()) {
+                        console.error(
+                            `[fhir-proxy] 403 ${method} ${requestPath}: access checker denied (ACCESS_CHECKER=${deps.config.accessChecker})`,
+                        );
                         return createOperationOutcome(403, "forbidden", `User is not authorized to ${method} ${url}`);
                     }
                     accessDecision = checkerDecision;

@@ -12,6 +12,7 @@ export const GatewayConfigSchema = z.object({
     ),
     wellKnownEndpoint: z.string().min(1),
     runMode: z.union(RUN_MODES.map((mode) => z.literal(mode))),
+    allowTokenIssuerHostMismatch: z.boolean(),
     port: z.number().int().min(1).max(65535).positive().default(DEFAULT_PORT),
 });
 
