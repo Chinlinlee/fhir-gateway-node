@@ -10,7 +10,7 @@ async function main(): Promise<void> {
         runMode: config.runMode,
     });
 
-    createApp({ tokenVerifier }).listen(config.port, ({ hostname, port }) => {
+    createApp({ tokenVerifier, config }).listen(config.port, ({ hostname, port }) => {
         console.log(`FHIR Gateway is running at http://${hostname}:${port}`);
     });
 }

@@ -75,7 +75,9 @@ export class PatientAccessCheckerService implements AccessChecker {
     }
 
     private processRead(request: FhirRequestDetails, resourceName: string): AccessDecision {
-        const patientIds = this.patientFinder.findPatientsForAccessCheck(request.requestPath, request.queryParams);
+        const patientIds = isSameResourceType(resourceName, "Patient")
+            ? this.patientFinder.findPatientsForAccessCheck(request.requestPath, request.queryParams)
+            : this.patientFinder.findPatientsFromParams(request.requestPath, request.queryParams);
         return grantedAccessDecision(
             this.validatePatientIds(patientIds) &&
                 this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.READ),

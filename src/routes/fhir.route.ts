@@ -1,0 +1,24 @@
+import { Elysia } from "elysia";
+
+import type { GatewayConfig } from "../configs/env.schema";
+import { FHIR_API_PREFIX } from "../constants/routes";
+import { FhirProxyController } from "../controllers/fhir-proxy.controller";
+import type { AccessCheckerRegistryService } from "../services/access-checker-registry.service";
+import type { AllowedQueriesCheckerService } from "../services/allowed-queries.service";
+import type { HttpFhirClientService } from "../services/http-fhir-client.service";
+import type { PatientFinderService } from "../services/patient-finder.service";
+import type { TokenVerifierService } from "../services/token-verifier.service";
+
+export type FhirRouteDeps = {
+    config: GatewayConfig;
+    tokenVerifier: TokenVerifierService;
+    httpFhirClient: HttpFhirClientService;
+    allowedQueries: AllowedQueriesCheckerService;
+    accessCheckerRegistry: AccessCheckerRegistryService;
+    patientFinder: PatientFinderService;
+};
+
+export const fhirRoute = (deps: FhirRouteDeps) =>
+    new Elysia({ name: "fhir-proxy", prefix: FHIR_API_PREFIX }).all("/*", async ({ request, params }) =>
+        FhirProxyController.handle(request, params["*"] ?? "", deps, FHIR_API_PREFIX),
+    );

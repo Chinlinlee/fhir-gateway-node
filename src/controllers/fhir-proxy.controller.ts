@@ -1,0 +1,290 @@
+import { promisify } from "node:util";
+import { gzip } from "node:zlib";
+
+import type { GatewayConfig } from "../configs/env.schema";
+import { AuthenticationError } from "../errors/authentication.error";
+import { InvalidRequestError } from "../errors/invalid-request.error";
+import type { AccessCheckerRegistryService } from "../services/access-checker-registry.service";
+import { PATIENT_CLAIM } from "../services/access-checkers/patient-access-checker.service";
+import type { AllowedQueriesCheckerService } from "../services/allowed-queries.service";
+import type { HttpFhirClientService } from "../services/http-fhir-client.service";
+import type { PatientFinderService } from "../services/patient-finder.service";
+import type { TokenVerifierService } from "../services/token-verifier.service";
+import type { AccessDecision } from "../types/access-decision";
+import type { FhirRequestDetails, FhirRequestMethod } from "../types/fhir-request";
+import type { VerifiedJwt } from "../types/verified-jwt";
+import { parseResourcePath } from "../utils/fhir.util";
+import { getPrimaryPatientSearchParam } from "../utils/patient-params.util";
+import { applyRequestMutation } from "../utils/request-mutation.util";
+
+type FhirProxyControllerDeps = {
+    config: GatewayConfig;
+    tokenVerifier: TokenVerifierService;
+    httpFhirClient: HttpFhirClientService;
+    allowedQueries: AllowedQueriesCheckerService;
+    accessCheckerRegistry: AccessCheckerRegistryService;
+    patientFinder: PatientFinderService;
+};
+
+const gzipAsync = promisify(gzip);
+
+function parseQueryParams(url: URL): Record<string, string[]> {
+    const result: Record<string, string[]> = {};
+    url.searchParams.forEach((value, key) => {
+        if (!result[key]) {
+            result[key] = [];
+        }
+        result[key].push(value);
+    });
+    return result;
+}
+
+function parseHeaders(headers: Headers): Record<string, string[]> {
+    const result: Record<string, string[]> = {};
+    headers.forEach((value, key) => {
+        result[key] = value
+            .split(",")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0);
+    });
+    return result;
+}
+
+function normalizeRequestPath(relativePath: string): string {
+    return relativePath.replace(/^\/+/, "").replace(/\/+$/, "");
+}
+
+function createOperationOutcome(status: number, code: "forbidden" | "login", diagnostics: string): Response {
+    return Response.json(
+        {
+            resourceType: "OperationOutcome",
+            issue: [
+                {
+                    severity: "error",
+                    code,
+                    diagnostics,
+                },
+            ],
+        },
+        { status },
+    );
+}
+
+function shouldReturnGzip(acceptEncodingHeader: string | null): boolean {
+    return acceptEncodingHeader?.toLowerCase().includes("gzip") ?? false;
+}
+
+function replaceProxyBaseUrl(content: string, proxyTo: string, gatewayBaseUrl: string): string {
+    return content.split(proxyTo).join(gatewayBaseUrl);
+}
+
+function enrichCapabilityStatementSecurity(rawBody: string): string {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(rawBody) as unknown;
+    } catch {
+        return rawBody;
+    }
+
+    if (!parsed || typeof parsed !== "object") {
+        return rawBody;
+    }
+    const capability = parsed as {
+        resourceType?: string;
+        rest?: Array<{ security?: Record<string, unknown> }>;
+    };
+    if (capability.resourceType !== "CapabilityStatement") {
+        return rawBody;
+    }
+    if (!Array.isArray(capability.rest) || capability.rest.length === 0) {
+        capability.rest = [{}];
+    }
+    const firstRest = capability.rest[0] ?? {};
+    firstRest.security = {
+        ...(firstRest.security ?? {}),
+        cors: true,
+        service: [{ coding: [{ code: "OAuth" }] }],
+    };
+    capability.rest[0] = firstRest;
+    return JSON.stringify(capability);
+}
+
+function maybeInjectPatientParam(
+    config: GatewayConfig,
+    requestPath: string,
+    requestType: FhirRequestMethod,
+    queryParams: Record<string, string[]>,
+    patientClaimValue: string | undefined,
+): Record<string, string[]> {
+    if (config.accessChecker !== "patient" || requestType !== "GET" || !patientClaimValue) {
+        return queryParams;
+    }
+    const { resourceName } = parseResourcePath(requestPath);
+    if (!resourceName || resourceName === "Patient") {
+        return queryParams;
+    }
+    const searchParam = getPrimaryPatientSearchParam(resourceName);
+    if (!searchParam || queryParams[searchParam]) {
+        return queryParams;
+    }
+    return {
+        ...queryParams,
+        [searchParam]: [`Patient/${patientClaimValue}`],
+    };
+}
+
+function buildRequestDetails(
+    requestPath: string,
+    requestType: FhirRequestMethod,
+    queryParams: Record<string, string[]>,
+    requestBody?: string,
+): FhirRequestDetails {
+    return {
+        requestPath,
+        requestType,
+        queryParams,
+        ...(requestBody !== undefined ? { requestBody } : {}),
+    };
+}
+
+function postProcessResponseBody(
+    requestPath: string,
+    responseBody: string,
+    accessDecision: AccessDecision,
+    requestDetails: FhirRequestDetails,
+): string {
+    let body = responseBody;
+    if (requestPath === "metadata") {
+        body = enrichCapabilityStatementSecurity(body);
+    }
+    try {
+        const postProcessed = accessDecision.postProcess?.(requestDetails, { status: 200, body });
+        if (typeof postProcessed === "string") {
+            return postProcessed;
+        }
+    } catch {
+        return body;
+    }
+    return body;
+}
+
+export abstract class FhirProxyController {
+    static async handle(
+        request: Request,
+        relativePath: string,
+        deps: FhirProxyControllerDeps,
+        fhirPrefix: string,
+    ): Promise<Response> {
+        const url = new URL(request.url);
+        const requestPath = normalizeRequestPath(relativePath);
+        const method = request.method.toUpperCase() as FhirRequestMethod;
+        const bodyBytes = new Uint8Array(await request.arrayBuffer());
+        const requestBody = bodyBytes.length > 0 ? Buffer.from(bodyBytes).toString("utf8") : undefined;
+        const sourceHeaders = parseHeaders(request.headers);
+        let queryParams = parseQueryParams(url);
+
+        let accessDecision: AccessDecision;
+        let verifiedJwtPatientClaim: string | undefined;
+
+        if (requestPath === "metadata") {
+            accessDecision = {
+                canAccess: () => true,
+                getRequestMutation: () => null,
+                postProcess: () => null,
+                getUserWho: () => null,
+            };
+        } else {
+            const preAuthRequest = buildRequestDetails(requestPath, method, queryParams, requestBody);
+            const unauthDecision = deps.allowedQueries.checkUnAuthenticatedAccess(preAuthRequest);
+            if (unauthDecision.canAccess()) {
+                accessDecision = unauthDecision;
+            } else {
+                const authHeader = request.headers.get("authorization");
+                if (!authHeader) {
+                    return createOperationOutcome(401, "login", "No Authorization header provided!");
+                }
+
+                let verifiedJwt: VerifiedJwt;
+                try {
+                    verifiedJwt = await deps.tokenVerifier.decodeAndVerifyBearerToken(authHeader);
+                } catch (error) {
+                    const diagnostics =
+                        error instanceof AuthenticationError || error instanceof Error
+                            ? error.message
+                            : "JWT verification failed";
+                    return createOperationOutcome(401, "login", diagnostics);
+                }
+
+                const jwtPatientClaim = verifiedJwt.payload[PATIENT_CLAIM];
+                verifiedJwtPatientClaim = typeof jwtPatientClaim === "string" ? jwtPatientClaim : undefined;
+                queryParams = maybeInjectPatientParam(
+                    deps.config,
+                    requestPath,
+                    method,
+                    queryParams,
+                    verifiedJwtPatientClaim,
+                );
+
+                const authenticatedRequest = buildRequestDetails(requestPath, method, queryParams, requestBody);
+                const allowedQueriesDecision = deps.allowedQueries.checkAccess(authenticatedRequest);
+                if (allowedQueriesDecision.canAccess()) {
+                    accessDecision = allowedQueriesDecision;
+                } else {
+                    let checkerDecision: AccessDecision;
+                    try {
+                        const checker = deps.accessCheckerRegistry.create(deps.config.accessChecker, {
+                            jwt: verifiedJwt,
+                            patientFinder: deps.patientFinder,
+                        });
+                        checkerDecision = checker.checkAccess(authenticatedRequest);
+                    } catch (error) {
+                        if (error instanceof InvalidRequestError) {
+                            return createOperationOutcome(400, "forbidden", error.message);
+                        }
+                        const diagnostics =
+                            error instanceof Error ? error.message : "Access checker initialization failed";
+                        return createOperationOutcome(401, "login", diagnostics);
+                    }
+                    if (!checkerDecision.canAccess()) {
+                        return createOperationOutcome(403, "forbidden", `User is not authorized to ${method} ${url}`);
+                    }
+                    accessDecision = checkerDecision;
+                }
+            }
+        }
+
+        const mutationRequest = buildRequestDetails(requestPath, method, queryParams, requestBody);
+        const mutation = accessDecision.getRequestMutation?.(mutationRequest);
+        const mutatedQueryParams = applyRequestMutation(queryParams, mutation);
+        const forwarded = await deps.httpFhirClient.handleRequest({
+            method,
+            requestPath,
+            queryParams: mutatedQueryParams,
+            headers: sourceHeaders,
+            body: bodyBytes,
+        });
+
+        const rawResponseBody = Buffer.from(forwarded.bodyBytes).toString("utf8");
+        let responseBody = postProcessResponseBody(requestPath, rawResponseBody, accessDecision, mutationRequest);
+        const gatewayBaseUrl = `${url.origin}${fhirPrefix}`;
+        responseBody = replaceProxyBaseUrl(responseBody, deps.config.proxyTo, gatewayBaseUrl);
+
+        const responseHeaders = deps.httpFhirClient.responseHeadersToKeep(forwarded.headers);
+        if (!responseHeaders.has("content-type")) {
+            responseHeaders.set("content-type", "application/json; charset=UTF-8");
+        }
+
+        if (shouldReturnGzip(request.headers.get("accept-encoding"))) {
+            responseHeaders.set("content-encoding", "gzip");
+            return new Response(await gzipAsync(Buffer.from(responseBody, "utf8")), {
+                status: forwarded.status,
+                headers: responseHeaders,
+            });
+        }
+
+        return new Response(responseBody, {
+            status: forwarded.status,
+            headers: responseHeaders,
+        });
+    }
+}

@@ -224,38 +224,38 @@
 
 ### 7.1 HTTP 轉發層（undici）
 
-- [ ] `services/http-fhir-client.service.ts`：抽象 `handleRequest`
-- [ ] 轉發 URL：`{PROXY_TO}/{path}?{params}`
-- [ ] 轉發 headers：保留 `content-type`、`accept-encoding`、`prefer`、`if-match` 等（SPEC §10.3）
-- [ ] **不轉發** Client `Authorization`；HAPI 後端 auth 為空；GCP 改用 service account token
-- [ ] 測試：`tests/http-fhir-client.test.ts` — 對照 `HttpFhirClientTest` / `GenericFhirClientTest`（可用 undici MockAgent 記錄請求，**不 mock undici 本身**）
+- [x] `services/http-fhir-client.service.ts`：抽象 `handleRequest`
+- [x] 轉發 URL：`{PROXY_TO}/{path}?{params}`
+- [x] 轉發 headers：保留 `content-type`、`accept-encoding`、`prefer`、`if-match` 等（SPEC §10.3）
+- [x] **不轉發** Client `Authorization`；HAPI 後端 auth 為空；GCP 改用 service account token
+- [x] 測試：`tests/http-fhir-client.test.ts` — 對照 `HttpFhirClientTest` / `GenericFhirClientTest`（可用 undici MockAgent 記錄請求，**不 mock undici 本身**）
 
 ### 7.2 fhir-kit-client 整合
 
-- [ ] `services/fhir-backend.service.ts`：讀寫 List/Patient/AuditEvent 等插件所需操作
-- [ ] `BACKEND_TYPE=HAPI`：一般 REST
+- [x] `services/fhir-backend.service.ts`：讀寫 List/Patient/AuditEvent 等插件所需操作
+- [x] `BACKEND_TYPE=HAPI`：一般 REST
 - [ ] `BACKEND_TYPE=GCP`：Google Application Default Credentials + `cloud-platform` scope（可選 Phase，若無 GCP 環境則 integration test skip）
-- [ ] 測試：最小 read/search 對 mock FHIR server（優先本地 undici mock server 回傳 Bundle）
+- [x] 測試：最小 read/search 對 mock FHIR server（優先本地 undici mock server 回傳 Bundle）
 
 ### 7.3 代理主流程（核心）
 
 > Java 參考：`BearerAuthorizationInterceptorTest.java`
 
-- [ ] `middlewares/bearer-authorization.middleware.ts` 或 `controllers/fhir-proxy.controller.ts` + `routes/fhir.route.ts`：`ALL /fhir/*`
+- [x] `middlewares/bearer-authorization.middleware.ts` 或 `controllers/fhir-proxy.controller.ts` + `routes/fhir.route.ts`：`ALL /fhir/*`
 - [ ] 流程：well-known → metadata（無 JWT）→ AllowedQueries unauth → JWT → AllowedQueries auth → AccessChecker → mutate → 轉發 → postProcess → Audit → URL replace → response
-- [ ] `metadata`：`CapabilityPostProcessor` 等效 — OAuth/CORS 安全描述
-- [ ] `canAccess() === false` → 403 FHIR `OperationOutcome`
-- [ ] Response headers 白名單（SPEC §3.5）；不重寫 `content-length`/`content-type` 的處理方式與原版一致
-- [ ] Response body：`PROXY_TO` → Gateway base URL 字串替換（串流或 buffer 實作）
-- [ ] `Accept-Encoding: gzip` 時回 gzip（對照 `shouldSendGzippedResponseWhenRequested*`）
-- [ ] 測試：`tests/bearer-authorization.test.ts`（Eden Treaty + 測試用 JWT + mock 後端）
-  - [ ] `authorizeRequestPatient` / `authorizeRequestList`
-  - [ ] `authorizeRequestMetadata`
-  - [ ] `authorizeAllowedUnauthenticatedRequest`
-  - [ ] `deniedRequest`
-  - [ ] `authorizeRequestTestReplaceUrl`
-  - [ ] `mutateRequest` / `mutateRequestRemoveQueryParams`
-  - [ ] gzip 案例
+- [x] `metadata`：`CapabilityPostProcessor` 等效 — OAuth/CORS 安全描述
+- [x] `canAccess() === false` → 403 FHIR `OperationOutcome`
+- [x] Response headers 白名單（SPEC §3.5）；不重寫 `content-length`/`content-type` 的處理方式與原版一致
+- [x] Response body：`PROXY_TO` → Gateway base URL 字串替換（串流或 buffer 實作）
+- [x] `Accept-Encoding: gzip` 時回 gzip（對照 `shouldSendGzippedResponseWhenRequested*`）
+- [x] 測試：`tests/bearer-authorization.test.ts`（Eden Treaty + 測試用 JWT + mock 後端）
+  - [x] `authorizeRequestPatient` / `authorizeRequestList`
+  - [x] `authorizeRequestMetadata`
+  - [x] `authorizeAllowedUnauthenticatedRequest`
+  - [x] `deniedRequest`
+  - [x] `authorizeRequestTestReplaceUrl`
+  - [x] `mutateRequest` / `mutateRequestRemoveQueryParams`
+  - [x] gzip 案例
 
 ---
 
@@ -320,7 +320,13 @@
 | Phase | 完成項 / 總項 |
 |-------|----------------|
 | 0 | 0.1–0.5 完成 |
-| 1 | 0 / TBD |
+| 1 | 完成 |
+| 2 | 完成 |
+| 3 | 完成（Proxy 注入於 Phase 7 串接） |
+| 4 | 完成 |
+| 5 | 完成 |
+| 6 | 完成 |
+| 7 | 7.1 完成、7.2 部分完成（GCP 待補）、7.3 部分完成（Audit 待 Phase 8） |
 | … | … |
 
 *完成實作後請將對應 `- [ ]` 改為 `- [x]` 並更新上表。*
