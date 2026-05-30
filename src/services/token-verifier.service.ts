@@ -1,9 +1,10 @@
 import { createPublicKey, type KeyObject } from "node:crypto";
-
-import { decodeJwt, decodeProtectedHeader, jwtVerify, type JWTVerifyOptions } from "jose";
+import type { JWTVerifyOptions } from "jose";
+import { decodeJwt, decodeProtectedHeader, jwtVerify } from "jose";
 
 import type { GatewayConfig } from "../configs/env.schema";
 import { BEARER_PREFIX, SIGN_ALGORITHM } from "../constants/auth";
+import { ENV_KEYS } from "../constants/config";
 import { AuthenticationError } from "../errors/authentication.error";
 import type { VerifiedJwt } from "../types/verified-jwt";
 import { HttpUtil } from "../utils/http.util";
@@ -32,7 +33,11 @@ export class TokenVerifierService {
         httpUtil: HttpUtil = new HttpUtil(),
     ): Promise<TokenVerifierService> {
         const publicKey = await TokenVerifierService.fetchAndDecodePublicKey(config.tokenIssuer, httpUtil);
-        const wellKnownConfigJson = await httpUtil.fetchWellKnownConfig(config.tokenIssuer, config.wellKnownEndpoint);
+        const wellKnownConfigJson = await httpUtil.fetchWellKnownConfig(
+            config.tokenIssuer,
+            config.wellKnownEndpoint,
+            ENV_KEYS.TOKEN_ISSUER,
+        );
 
         return new TokenVerifierService(config.tokenIssuer, wellKnownConfigJson, publicKey, config.runMode === "DEV");
     }
@@ -106,7 +111,7 @@ export class TokenVerifierService {
     }
 
     private static async fetchAndDecodePublicKey(tokenIssuer: string, httpUtil: HttpUtil): Promise<KeyObject> {
-        const body = await httpUtil.getText(tokenIssuer);
+        const body = await httpUtil.getTextWithStartupRetry(tokenIssuer, ENV_KEYS.TOKEN_ISSUER);
         let json: unknown;
         try {
             json = JSON.parse(body) as unknown;
