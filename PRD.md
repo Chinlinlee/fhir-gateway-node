@@ -234,7 +234,7 @@
 
 - [x] `services/fhir-backend.service.ts`：讀寫 List/Patient/AuditEvent 等插件所需操作
 - [x] `BACKEND_TYPE=HAPI`：一般 REST
-- [ ] `BACKEND_TYPE=GCP`：Google Application Default Credentials + `cloud-platform` scope（可選 Phase，若無 GCP 環境則 integration test skip）
+- [x] `BACKEND_TYPE=GCP`：Google Application Default Credentials + `cloud-platform` scope（可選 Phase，若無 GCP 環境則 integration test skip）
 - [x] 測試：最小 read/search 對 mock FHIR server（優先本地 undici mock server 回傳 Bundle）
 
 ### 7.3 代理主流程（核心）
@@ -326,7 +326,7 @@
 | 4 | 完成 |
 | 5 | 完成 |
 | 6 | 完成 |
-| 7 | 7.1 完成、7.2 部分完成（GCP 待補）、7.3 完成 |
+| 7 | 完成 |
 | 8 | 完成 |
 | … | … |
 

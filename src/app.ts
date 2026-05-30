@@ -11,6 +11,7 @@ import { createDefaultAccessCheckerRegistry } from "./services/access-checker-re
 import { AllowedQueriesCheckerService } from "./services/allowed-queries.service";
 import { AuditEventService } from "./services/audit-event.service";
 import { FhirBackendService } from "./services/fhir-backend.service";
+import { GcpAccessTokenProviderService } from "./services/gcp-access-token-provider.service";
 import { HttpFhirClientService } from "./services/http-fhir-client.service";
 import { PatientFinderService } from "./services/patient-finder.service";
 import type { TokenVerifierService } from "./services/token-verifier.service";
@@ -27,6 +28,7 @@ export type CreateAppOptions = {
 
 export const createApp = (options?: CreateAppOptions) => {
     const app = new Elysia({ adapter: node() }).use(corsPlugin).use(healthRoute);
+    const gcpTokenProvider = options?.config?.backendType === "GCP" ? new GcpAccessTokenProviderService() : null;
 
     if (options?.tokenVerifier) {
         app.use(wellKnownRoute(options.tokenVerifier));
@@ -47,6 +49,7 @@ export const createApp = (options?: CreateAppOptions) => {
                     new HttpFhirClientService({
                         proxyTo: options.config.proxyTo,
                         backendType: options.config.backendType,
+                        ...(gcpTokenProvider ? { getGcpAccessToken: () => gcpTokenProvider.getAccessToken() } : {}),
                     }),
                 auditEventService:
                     options.auditEventService ?? new AuditEventService(new FhirBackendService({ baseUrl: options.config.proxyTo })),

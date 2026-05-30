@@ -95,6 +95,9 @@ export class HttpFhirClientService {
         this.proxyTo = options.proxyTo;
         this.backendType = options.backendType;
         this.getGcpAccessToken = options.getGcpAccessToken;
+        if (this.backendType === "GCP" && !this.getGcpAccessToken) {
+            throw new Error("GCP backend requires getGcpAccessToken provider");
+        }
     }
 
     async handleRequest(forwardRequest: ForwardRequest): Promise<ForwardResponse> {

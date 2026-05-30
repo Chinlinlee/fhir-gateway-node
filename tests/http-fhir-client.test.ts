@@ -20,6 +20,12 @@ describe("HttpFhirClientService", () => {
                 res.end(JSON.stringify({ resourceType: "Patient", id: "123" }));
                 return;
             }
+            if (req.method === "GET" && url.pathname === "/fhir/Patient/456" && url.searchParams.get("x") === "2") {
+                receivedAuthorization = req.headers.authorization ?? "";
+                res.writeHead(200, { etag: "v2" });
+                res.end(JSON.stringify({ resourceType: "Patient", id: "456" }));
+                return;
+            }
             res.writeHead(404);
             res.end();
         });
@@ -61,5 +67,25 @@ describe("HttpFhirClientService", () => {
         expect(receivedIfMatch).toBe('W/"1"');
         expect(service.responseHeadersToKeep(response.headers).get("etag")).toBe("v1");
         expect(service.responseHeadersToKeep(response.headers).get("x-ignore-me")).toBeNull();
+    });
+
+    it("handleRequest forwards GCP bearer token from provider", async () => {
+        const service = new HttpFhirClientService({
+            proxyTo: baseUrl,
+            backendType: "GCP",
+            getGcpAccessToken: async () => "gcp-access-token",
+        });
+
+        const response = await service.handleRequest({
+            method: "GET",
+            requestPath: "Patient/456",
+            queryParams: { x: ["2"] },
+            headers: {
+                authorization: ["Bearer client-token-should-be-ignored"],
+            },
+        });
+
+        expect(response.status).toBe(200);
+        expect(receivedAuthorization).toBe("Bearer gcp-access-token");
     });
 });
