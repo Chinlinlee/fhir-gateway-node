@@ -3,7 +3,7 @@
 import type { JWTPayload } from "jose";
 
 import type { AuditUserWho } from "../types/access-decision";
-import type { FhirRequestDetails, FhirRequestMethod } from "../types/fhir-request";
+import type { FhirRequestDetails } from "../types/fhir-request";
 import { isValidFhirId, isValidFhirResourceType } from "../utils/fhir.util";
 
 type AuditEventBackend = {
@@ -25,8 +25,35 @@ const AUDIT_EVENT_TYPE_SYSTEM = "http://terminology.hl7.org/CodeSystem/audit-eve
 const AUDIT_EVENT_REST_TYPE = "rest";
 const AUDIT_REST_INTERACTION_SYSTEM = "http://hl7.org/fhir/restful-interaction";
 
-function toRestInteraction(method: FhirRequestMethod): string {
-    switch (method) {
+function isSearchTypeRequest(request: FhirRequestDetails): boolean {
+    const normalizedPath = request.requestPath.replace(/^\/+/, "").replace(/\/+$/, "");
+    const segments = normalizedPath.split("/").filter((segment) => segment.length > 0);
+    const [resourceType, operation] = segments;
+    if (!resourceType) {
+        return false;
+    }
+
+    if (request.requestType === "POST") {
+        return segments.length === 2 && operation === "_search" && isValidFhirResourceType(resourceType);
+    }
+
+    if (request.requestType !== "GET") {
+        return false;
+    }
+
+    if (Object.keys(request.queryParams).length === 0) {
+        return false;
+    }
+
+    return segments.length === 1 && isValidFhirResourceType(resourceType);
+}
+
+function toRestInteraction(request: FhirRequestDetails): string {
+    if (isSearchTypeRequest(request)) {
+        return "search-type";
+    }
+
+    switch (request.requestType) {
         case "GET":
             return "read";
         case "POST":
@@ -41,11 +68,16 @@ function toRestInteraction(method: FhirRequestMethod): string {
     }
 }
 
-function toAuditAction(method: FhirRequestMethod, responseStatus: number): "C" | "R" | "U" | "D" | "E" | null {
+function toAuditAction(request: FhirRequestDetails, responseStatus: number): "C" | "R" | "U" | "D" | "E" | null {
     if (responseStatus >= 400) {
         return "E";
     }
-    switch (method) {
+
+    if (isSearchTypeRequest(request)) {
+        return "E";
+    }
+
+    switch (request.requestType) {
         case "GET":
             return "R";
         case "POST":
@@ -124,6 +156,42 @@ function extractResourceReference(
     );
 }
 
+function buildEntityQuery(queryParams: Record<string, string[]>): string | null {
+    const query = Object.entries(queryParams)
+        .flatMap(([key, values]) =>
+            values.map((value) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`),
+        )
+        .join("&");
+    if (!query) {
+        return null;
+    }
+    return Buffer.from(`?${query}`, "utf8").toString("base64");
+}
+
+function buildAuditEntity(
+    isSearch: boolean,
+    entityQuery: string | null,
+    resourceReference: string | null,
+): fhir4.AuditEvent["entity"] | undefined {
+    if (isSearch) {
+        if (!entityQuery) {
+            return undefined;
+        }
+        return [{ query: entityQuery }];
+    }
+
+    if (!resourceReference) {
+        return undefined;
+    }
+    return [
+        {
+            what: {
+                reference: resourceReference,
+            },
+        },
+    ];
+}
+
 function buildAgentWho(userWho: AuditUserWho): fhir4.Reference {
     const identifier = userWho.identifier
         ? {
@@ -155,7 +223,8 @@ export class AuditEventService {
     }
 
     async log(input: AuditEventInput): Promise<void> {
-        const action = toAuditAction(input.request.requestType, input.responseStatus);
+        const isSearch = isSearchTypeRequest(input.request);
+        const action = toAuditAction(input.request, input.responseStatus);
         if (!action || !input.configuredActions.includes(action)) {
             return;
         }
@@ -165,6 +234,8 @@ export class AuditEventService {
             input.responseHeaders.get("content-location"),
             input.responseBody,
         );
+        const entityQuery = isSearch ? buildEntityQuery(input.request.queryParams) : null;
+        const auditEntity = buildAuditEntity(isSearch, entityQuery, resourceReference);
 
         const azp = claimAsString(input.jwtPayload, "azp");
         const jti = claimAsString(input.jwtPayload, "jti");
@@ -179,7 +250,7 @@ export class AuditEventService {
             subtype: [
                 {
                     system: AUDIT_REST_INTERACTION_SYSTEM,
-                    code: toRestInteraction(input.request.requestType),
+                    code: toRestInteraction(input.request),
                 },
             ],
             action,
@@ -205,17 +276,7 @@ export class AuditEventService {
                     display: input.gatewayBaseUrl,
                 },
             },
-            ...(resourceReference
-                ? {
-                      entity: [
-                          {
-                              what: {
-                                  reference: resourceReference,
-                              },
-                          },
-                      ],
-                  }
-                : {}),
+            ...(auditEntity ? { entity: auditEntity } : {}),
         };
 
         await this.backend.postResource(auditEvent);
