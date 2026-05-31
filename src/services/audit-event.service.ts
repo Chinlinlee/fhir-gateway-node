@@ -41,10 +41,6 @@ function isSearchTypeRequest(request: FhirRequestDetails): boolean {
         return false;
     }
 
-    if (Object.keys(request.queryParams).length === 0) {
-        return false;
-    }
-
     return segments.length === 1 && isValidFhirResourceType(resourceType);
 }
 
@@ -158,9 +154,7 @@ function extractResourceReference(
 
 function buildEntityQuery(queryParams: Record<string, string[]>): string | null {
     const query = Object.entries(queryParams)
-        .flatMap(([key, values]) =>
-            values.map((value) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`),
-        )
+        .flatMap(([key, values]) => values.map((value) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`))
         .join("&");
     if (!query) {
         return null;
