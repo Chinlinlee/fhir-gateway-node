@@ -85,9 +85,7 @@ export class PatientAccessCheckerService implements AccessChecker {
 
     private processRead(request: FhirRequestDetails, resourceName: string): AccessDecision {
         if (this.authorizedPatientId === null) {
-            return grantedAccessDecision(
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.READ),
-            );
+            return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.READ));
         }
 
         const patientIds = isSameResourceType(resourceName, "Patient")
@@ -234,9 +232,7 @@ export class PatientAccessCheckerService implements AccessChecker {
         }
 
         if (this.authorizedPatientId === null) {
-            return grantedAccessDecision(
-                this.smartScopeChecker.hasPermission("Patient", SmartScopePermission.UPDATE),
-            );
+            return grantedAccessDecision(this.smartScopeChecker.hasPermission("Patient", SmartScopePermission.UPDATE));
         }
 
         return grantedAccessDecision(
@@ -353,10 +349,7 @@ export class PatientAccessCheckerService implements AccessChecker {
     }
 }
 
-function createSmartScopeCheckerFromJwt(
-    scopesClaim: string,
-    scopePrincipal: SmartScopePrincipal,
-): SmartScopeChecker {
+function createSmartScopeCheckerFromJwt(scopesClaim: string, scopePrincipal: SmartScopePrincipal): SmartScopeChecker {
     const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
     return new SmartScopeChecker(scopes, scopePrincipal);
 }
@@ -370,10 +363,14 @@ export const patientAccessCheckerFactory: AccessCheckerFactory = {
             throw new AuthenticationError("No SMART FHIR scopes found in JWT scope claim");
         }
 
-        const authorizedPatientId =
-            scopePrincipal === SmartScopePrincipal.PATIENT
-                ? getJwtClaimIdOrFail(context.jwt.payload, PATIENT_CLAIM)
-                : null;
+        let authorizedPatientId = null;
+        try {
+            authorizedPatientId = getJwtClaimIdOrFail(context.jwt.payload, PATIENT_CLAIM);
+        } catch {
+            // 無 patient claim 時，授權 patient id 為 null
+            authorizedPatientId = null;
+        }
+        console.log("authorizedPatientId", authorizedPatientId);
         const smartScopeChecker = createSmartScopeCheckerFromJwt(scopesClaim, scopePrincipal);
         return new PatientAccessCheckerService(authorizedPatientId, context.patientFinder, smartScopeChecker);
     },
