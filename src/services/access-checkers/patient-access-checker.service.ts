@@ -1,3 +1,4 @@
+import { AuthenticationError } from "../../errors/authentication.error";
 import type {
     AccessChecker,
     AccessCheckerCreateContext,
@@ -7,7 +8,6 @@ import type {
 import type { AccessDecision } from "../../types/access-decision";
 import type { FhirBundleEntry } from "../../types/fhir-bundle";
 import type { FhirRequestDetails } from "../../types/fhir-request";
-import { AuthenticationError } from "../../errors/authentication.error";
 import { getResourceIdOrNull, isSameResourceType, parseResourcePath } from "../../utils/fhir.util";
 import { getJwtClaimIdOrFail, getJwtClaimOrFail } from "../../utils/jwt-claim.util";
 import {

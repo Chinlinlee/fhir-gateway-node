@@ -11,6 +11,42 @@
 - realm 請使用 `smart`
 - patient-based flow 需使用 `patient` claim（JWT claim key: `patient`）
 
+## Patient Access Checker Flow（SMART Patient-specific scopes）
+
+`ACCESS_CHECKER=patient` 時，gateway 會依 SMART scope principal 決定授權模式：
+
+- scope 含 `patient/...`：使用 patient-specific 授權（需要 `patient` claim）
+- scope 只有 `user/...` 或 `system/...`：僅做 SMART scope CRUDS 權限檢查（不綁單一病人）
+
+流程圖（client 到 FHIR server）：
+
+```mermaid
+flowchart TD
+    A[Client App] -->|1. Send FHIR request + Bearer token| B[fhir-gateway-node FhirProxyController]
+    B -->|2. Verify JWT issuer/signature/exp| C[Parse SMART scopes from scope claim]
+    C -->|3. Resolve principal patient > user > system| D[PatientAccessCheckerFactory]
+
+    D -->|principal = patient| E[Read patient claim as authorizedPatientId]
+    E --> F[Build PatientAccessCheckerService]
+
+    D -->|principal = user/system| G[authorizedPatientId = null]
+    G --> F
+
+    F --> H[Check SMART permission by resource + method CREATE/READ/UPDATE/DELETE/SEARCH]
+    H --> I{authorizedPatientId exists?}
+    I -->|Yes| J[Validate referenced patient IDs == authorizedPatientId]
+    I -->|No| K[Skip patient-id binding check]
+    J --> L{AccessDecision}
+    K --> L
+
+    L -->|allow| M[Forward request to FHIR Server]
+    L -->|deny| N[Return 403 OperationOutcome]
+
+    M --> O[FHIR Server HAPI/GCP/etc.]
+    O -->|Return FHIR response| P[fhir-gateway-node]
+    P --> Q[Client App]
+```
+
 ## 環境變數（Environment Variables）
 
 先複製範例檔：
