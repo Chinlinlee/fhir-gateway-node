@@ -120,9 +120,7 @@ export class PatientFinderService {
         }
 
         if (resourceId) {
-            throw new InvalidRequestError(
-                `Direct resource fetch is only supported for Patient; use search for ${resourceName}`,
-            );
+            return this.checkParamsAndFindPatientIds(resourceName, queryParams) ?? new Set();
         }
 
         const patientIds = this.checkParamsAndFindPatientIds(resourceName, queryParams);

@@ -92,6 +92,26 @@ describe("PatientFinderService.findPatientsFromParams", () => {
     });
 });
 
+describe("PatientFinderService.findPatientsForAccessCheck", () => {
+    const finder = PatientFinderService.getInstance();
+
+    it("DELETE /Observation/{id} without patient query returns empty set", () => {
+        const ids = finder.findPatientsForAccessCheck("Observation/1008", {});
+        expect(ids.size).toBe(0);
+    });
+
+    it("DELETE /Observation/{id} with patient query extracts patient", () => {
+        const ids = finder.findPatientsForAccessCheck("Observation/1008", {
+            patient: ["be92a43f-de46-affa-b131-bbf9eea51140"],
+        });
+        expect([...ids]).toEqual(["be92a43f-de46-affa-b131-bbf9eea51140"]);
+    });
+
+    it("Observation search without patient query still throws", () => {
+        expect(() => finder.findPatientsForAccessCheck("Observation", {})).toThrow(/Patient ID cannot be found/);
+    });
+});
+
 describe("PatientFinderService.findPatientsInBundle", () => {
     const finder = PatientFinderService.getInstance();
 
