@@ -164,6 +164,7 @@ function buildEntityQuery(queryParams: Record<string, string[]>): string | null 
 
 function buildAuditEntity(
     isSearch: boolean,
+    isDeleteAction: boolean,
     entityQuery: string | null,
     resourceReference: string | null,
 ): fhir4.AuditEvent["entity"] | undefined {
@@ -172,6 +173,10 @@ function buildAuditEntity(
             return undefined;
         }
         return [{ query: entityQuery }];
+    }
+
+    if (isDeleteAction) {
+        return undefined;
     }
 
     if (!resourceReference) {
@@ -228,8 +233,9 @@ export class AuditEventService {
             input.responseHeaders.get("content-location"),
             input.responseBody,
         );
+        const isDeleteAction = action === "D";
         const entityQuery = isSearch ? buildEntityQuery(input.request.queryParams) : null;
-        const auditEntity = buildAuditEntity(isSearch, entityQuery, resourceReference);
+        const auditEntity = buildAuditEntity(isSearch, isDeleteAction, entityQuery, resourceReference);
 
         const azp = claimAsString(input.jwtPayload, "azp");
         const jti = claimAsString(input.jwtPayload, "jti");

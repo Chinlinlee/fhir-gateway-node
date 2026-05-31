@@ -159,11 +159,12 @@ describe("AuditEventService", () => {
             },
             jwtPayload: {} as JWTPayload,
             gatewayBaseUrl: "http://gateway/fhir",
-            configuredActions: ["R"],
+            configuredActions: ["E"],
         });
 
         expect(posts.length).toBe(1);
         const auditEvent = posts[0]?.resource as fhir4.AuditEvent;
+        expect(auditEvent.action).toBe("E");
         expect(auditEvent.entity).toBeUndefined();
     });
 
