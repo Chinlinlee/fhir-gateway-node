@@ -25,17 +25,18 @@ describe("HttpUtil.getTextWithStartupRetry", () => {
         const promise = http.getTextWithStartupRetry(url, envKey);
         const assertion = expect(promise).rejects.toSatisfy((error: unknown) => {
             expect(error).toBeInstanceOf(StartupConnectionError);
-            expect(error).toMatchObject({ envKey, url, attempts: 3 });
+            expect(error).toMatchObject({ envKey, url, attempts: 4 });
             return true;
         });
 
         await vi.advanceTimersByTimeAsync(3000);
         await vi.advanceTimersByTimeAsync(6000);
+        await vi.advanceTimersByTimeAsync(9000);
         await assertion;
 
-        expect(warnSpy).toHaveBeenCalledTimes(2);
+        expect(warnSpy).toHaveBeenCalledTimes(3);
         expect(warnSpy.mock.calls[0]?.[0]).toContain(`Cannot connect to '${envKey}'`);
         expect(warnSpy.mock.calls[0]?.[0]).toContain(url);
-        expect(warnSpy.mock.calls[0]?.[0]).toContain("attempt 1/3");
+        expect(warnSpy.mock.calls[0]?.[0]).toContain("attempt 1/4");
     });
 });

@@ -54,11 +54,11 @@ describe("retryWithDelays", () => {
         expect(fn).toHaveBeenCalledTimes(2);
     });
 
-    it("buildRetryDelaysMs — linear from base (3s → 6s)", () => {
-        expect(buildRetryDelaysMs(3000, 2)).toEqual([3000, 6000]);
+    it("buildRetryDelaysMs — linear from base (3s → 9s)", () => {
+        expect(buildRetryDelaysMs(3000, 3)).toEqual([3000, 6000, 9000]);
         expect(STARTUP_FETCH_RETRY_DELAYS_MS).toEqual(buildRetryDelaysMs());
         expect(STARTUP_FETCH_RETRY_BASE_DELAY_MS).toBe(3000);
-        expect(STARTUP_FETCH_RETRY_COUNT).toBe(2);
+        expect(STARTUP_FETCH_RETRY_COUNT).toBe(3);
     });
 });
 

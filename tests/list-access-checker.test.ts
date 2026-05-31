@@ -68,7 +68,7 @@ describe("ListAccessCheckerService", () => {
     });
 
     it("canAccessDirectResourceNotAuthorized", () => {
-        expect(() => checker.checkAccess(buildFhirRequest("Observation/a-random-id"))).toThrow(InvalidRequestError);
+        expect(checker.checkAccess(buildFhirRequest("Observation/a-random-id")).canAccess()).toBe(false);
     });
 
     it("canAccessSearchQuery", () => {

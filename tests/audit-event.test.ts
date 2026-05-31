@@ -200,6 +200,39 @@ describe("AuditEventService", () => {
         });
     });
 
+    it("omits entity reference for delete action", async () => {
+        const posts: PostCall[] = [];
+        const service = new AuditEventService({
+            postResource: async (resource) => {
+                posts.push({ resource });
+                return resource;
+            },
+        });
+
+        await service.log({
+            request: {
+                requestPath: "Observation/1008",
+                requestType: "DELETE",
+                queryParams: {},
+            },
+            responseStatus: 204,
+            responseBody: "",
+            responseHeaders: new Headers(),
+            userWho: {
+                resourceType: "Practitioner",
+                display: "Dr. Smith",
+            },
+            jwtPayload: {} as JWTPayload,
+            gatewayBaseUrl: "http://gateway/fhir",
+            configuredActions: ["D"],
+        });
+
+        expect(posts.length).toBe(1);
+        const auditEvent = posts[0]?.resource as fhir4.AuditEvent;
+        expect(auditEvent.action).toBe("D");
+        expect(auditEvent.entity).toBeUndefined();
+    });
+
     it("skips logging when action is not configured", async () => {
         const posts: PostCall[] = [];
         const service = new AuditEventService({
