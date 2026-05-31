@@ -137,14 +137,14 @@ function createSmartScope(scope: string): SmartFhirScope {
  */
 export function resolveSmartScopePrincipal(scopes: readonly SmartFhirScope[]): SmartScopePrincipal | null {
     const principals = new Set(scopes.map((scope) => scope.principal));
-    if (principals.has(SmartScopePrincipal.PATIENT)) {
-        return SmartScopePrincipal.PATIENT;
+    if (principals.has(SmartScopePrincipal.SYSTEM)) {
+        return SmartScopePrincipal.SYSTEM;
     }
     if (principals.has(SmartScopePrincipal.USER)) {
         return SmartScopePrincipal.USER;
     }
-    if (principals.has(SmartScopePrincipal.SYSTEM)) {
-        return SmartScopePrincipal.SYSTEM;
+    if (principals.has(SmartScopePrincipal.PATIENT)) {
+        return SmartScopePrincipal.PATIENT;
     }
     return null;
 }
