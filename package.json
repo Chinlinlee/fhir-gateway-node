@@ -10,6 +10,7 @@
         "start": "node dist/index.cjs",
         "test": "vitest run",
         "test:watch": "vitest",
+        "test:e2e": "tsx e2e-test/e2e.ts",
         "format": "biome format --write",
         "generate:patient-params": "node scripts/generate-patient-params.mjs"
     },

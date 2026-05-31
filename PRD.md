@@ -275,7 +275,7 @@
 - [x] `env.example`：環境變數範例
 - [x] `README.md`：環境變數、docker-compose 對接、`smart` realm + `patient` claim 說明
 - [x] Dockerfile：builder 使用 `node:24-bookworm-slim`、runner 使用 `gcr.io/distroless/nodejs24-debian13`
-- [ ] （可選）移植 `fhir-gateway/e2e-test` 關鍵情境為 Node 腳本
+- [x] （可選）移植 `fhir-gateway/e2e-test` 關鍵情境為 Node 腳本
 
 ---
 
