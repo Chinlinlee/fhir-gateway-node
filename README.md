@@ -55,6 +55,153 @@ flowchart TD
     P --> Q[Client App]
 ```
 
+## 如何寫 Access Checker
+
+Access Checker 是 gateway 在 JWT 驗證通過、且 Allowed Queries 未放行後，決定「這個請求能否轉發到 FHIR backend」的插件。設計對齊 Java 版 `@Named` AccessChecker 插件模型。
+
+### 核心介面
+
+| 類型 | 說明 |
+| --- | --- |
+| `AccessChecker` | 每個請求建立一個實例；實作 `checkAccess(request)` |
+| `AccessCheckerFactory` | thread-safe；從 JWT 等 context 建立 `AccessChecker` |
+| `AccessCheckerCreateContext` | Factory 可用依賴：`jwt`、`patientFinder`、（選用）`httpFhirClient` |
+| `FhirRequestDetails` | 請求摘要：`requestPath`、`requestType`、`queryParams`、`requestBody?` |
+| `AccessDecision` | 授權結果；可選附帶 mutation / postProcess / audit user |
+
+請求處理順序（`FhirProxyController`）：
+
+1. `metadata` → 無需 JWT，直接放行
+2. Allowed Queries（未驗證）→ 請求符合 allow-list 中標記 `allowUnauthenticatedRequests` 的項目時，**直接放行**（不需 JWT，也不執行 Access Checker）
+3. JWT 驗證 → 上一步未放行時，必須提供有效 Bearer token
+4. Allowed Queries（已驗證）→ 請求符合 allow-list 任一項目時，**直接放行**（仍須 JWT，但不執行 Access Checker）
+5. **`accessCheckerRegistry.create(ACCESS_CHECKER, context)` → `checkAccess()`** → 前兩步 allow-list 皆未放行時才執行
+6. 若 `canAccess()` 為 `false` → 403；否則套用 `getRequestMutation` 後轉發
+7. 回應後執行 `postProcess`（若有）
+
+### 最小範例
+
+```typescript
+// src/services/access-checkers/my-access-checker.service.ts
+import type { AccessChecker, AccessCheckerCreateContext, AccessCheckerFactory } from "../../types/access-checker";
+import { accessGranted, accessDenied } from "../../types/access-decision";
+import type { FhirRequestDetails } from "../../types/fhir-request";
+import { parseResourcePath } from "../../utils/fhir.util";
+
+class MyAccessCheckerService implements AccessChecker {
+    checkAccess(request: FhirRequestDetails) {
+        const { resourceName } = parseResourcePath(request.requestPath);
+        if (resourceName === "Patient" && request.requestType === "GET") {
+            return accessGranted();
+        }
+        return accessDenied();
+    }
+}
+
+export const myAccessCheckerFactory: AccessCheckerFactory = {
+    create(_context: AccessCheckerCreateContext): AccessChecker {
+        return new MyAccessCheckerService();
+    },
+};
+```
+
+### 註冊自訂 Checker
+
+**方式 A — 啟動時注入 registry（建議）**
+
+```typescript
+import { createApp } from "./app";
+import { createDefaultAccessCheckerRegistry } from "./services/access-checker-registry.service";
+import { myAccessCheckerFactory } from "./services/access-checkers/my-access-checker.service";
+
+const registry = createDefaultAccessCheckerRegistry();
+registry.register("my-checker", myAccessCheckerFactory);
+
+createApp({ tokenVerifier, config: { ...config, accessChecker: "my-checker" }, accessCheckerRegistry: registry });
+```
+
+**方式 B — 修改 `createDefaultAccessCheckerRegistry()`**
+
+在 `src/services/access-checker-registry.service.ts` 加入 `registry.register("my-checker", myAccessCheckerFactory)`，並設定 `ACCESS_CHECKER=my-checker`。
+
+> `ACCESS_CHECKER` 可為任意非空字串；啟動時 registry 必須已註冊對應名稱，否則請求會回 401。
+
+### AccessDecision 進階能力
+
+除 `canAccess()` 外，可選實作：
+
+| 方法 | 用途 |
+| --- | --- |
+| `getRequestMutation` | 轉發前修改 query params（新增 / 移除） |
+| `postProcess` | 收到 backend 回應後修改 body（例如 List checker 在 POST Patient 成功後更新 List） |
+| `getUserWho` | 自訂 AuditEvent 的 agent；預設由 controller 從 JWT 推斷 |
+
+輔助函式（`src/types/access-decision.ts`）：
+
+- `accessGranted()` / `accessDenied()` — 最簡單的 allow / deny
+- `accessDecisionWithMutation(granted, getMutation)` — 帶 query mutation 的決策
+- `noOpAccessDecision(granted)` — 無 side effect 的決策
+
+### Factory 常用依賴
+
+**JWT claims**
+
+```typescript
+import { getJwtClaimOrFail, getJwtClaimIdOrFail } from "../utils/jwt-claim.util";
+
+const scopes = getJwtClaimOrFail(context.jwt.payload, "scope");
+const patientId = getJwtClaimIdOrFail(context.jwt.payload, "patient");
+```
+
+JWT claim 解析失敗應拋 `AuthenticationError`（回 401）；請求格式錯誤拋 `InvalidRequestError`（回 400）。
+
+**PatientFinder**
+
+從 query params、request body、Bundle 或 PATCH 中找出涉及的 Patient ID：
+
+```typescript
+const patientIds = context.patientFinder.findPatientsForAccessCheck(
+    request.requestPath,
+    request.queryParams,
+);
+const bodyPatients = context.patientFinder.findPatientsInResource(
+    request.requestPath,
+    request.requestBody ?? "",
+);
+```
+
+**HttpFhirClient**（需主動傳入 context）
+
+若 checker 需在授權階段查詢 backend（如 `list` checker 驗證 List membership），Factory 需 `httpFhirClient`。目前 `FhirProxyController` 尚未將其注入 `create()` context；自訂整合時請在 controller 或 route deps 中補上。單元測試可直接注入 mock client（參考 `tests/helpers/mock-http-fhir-client.ts`）。
+
+**SMART Scope**
+
+內建 `patient` / `basic` checker 使用 `smart-scope.service.ts` 解析 scope 與 CRUDS 權限，自訂 checker 可重用 `SmartScopeChecker`、`MergedSmartScopeChecker`。
+
+### 錯誤處理慣例
+
+| 拋出 | HTTP | 情境 |
+| --- | --- | --- |
+| `AuthenticationError` | 401 | JWT claim 缺失、scope 不足、Factory 初始化失敗 |
+| `InvalidRequestError` | 400 | 請求 body / path 無法解析 |
+| `accessDenied()` | 403 | 授權邏輯判定拒絕（不拋例外） |
+
+### 內建 Checker 一覽
+
+| 名稱 | `ACCESS_CHECKER` | 說明 |
+| --- | --- | --- |
+| Permissive | `permissive` | DEV only；有效 JWT 即放行 |
+| List | `list` | 依 JWT `patient_list` claim 限制可存取的 Patient 集合 |
+| Patient | `patient` | SMART patient/user/system scope + patient claim 綁定 |
+| Basic | `basic` | SMART scope CRUDS 合併檢查，不綁 patient |
+
+實作參考：
+
+- 最簡：`src/services/access-checkers/permissive-access-checker.service.ts`
+- SMART scope：`src/services/access-checkers/basic-access-checker.service.ts`
+- Patient 綁定：`src/services/access-checkers/patient-access-checker.service.ts`
+- postProcess + backend 查詢：`src/services/access-checkers/list-access-checker.service.ts`
+
 ## 環境變數（Environment Variables）
 
 先複製範例檔：
