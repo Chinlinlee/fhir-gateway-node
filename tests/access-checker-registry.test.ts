@@ -21,6 +21,7 @@ const stubContext = {
             deletedPatients: new Set<string>(),
             patientsToCreate: false,
         }),
+        isPatientCompartmentResource: () => false,
     },
 };
 

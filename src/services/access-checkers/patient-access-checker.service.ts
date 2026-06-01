@@ -12,7 +12,7 @@ import { getResourceIdOrNull, isSameResourceType, parseResourcePath } from "../.
 import { getJwtClaimIdOrFail, getJwtClaimOrFail } from "../../utils/jwt-claim.util";
 import {
     extractSmartFhirScopesFromTokens,
-    resolveSmartScopePrincipal,
+    type SmartFhirScope,
     SmartScopeChecker,
     SmartScopePermission,
     SmartScopePrincipal,
@@ -25,16 +25,16 @@ export const SCOPES_CLAIM = "scope";
 export class PatientAccessCheckerService implements AccessChecker {
     private readonly authorizedPatientId: string | null;
     private readonly patientFinder: PatientFinderLike;
-    private readonly smartScopeChecker: SmartScopeChecker;
+    private readonly scopeCheckersByPrincipal: Map<SmartScopePrincipal, SmartScopeChecker>;
 
     constructor(
         authorizedPatientId: string | null,
         patientFinder: PatientFinderLike,
-        smartScopeChecker: SmartScopeChecker,
+        scopeCheckersByPrincipal: Map<SmartScopePrincipal, SmartScopeChecker>,
     ) {
         this.authorizedPatientId = authorizedPatientId;
         this.patientFinder = patientFinder;
-        this.smartScopeChecker = smartScopeChecker;
+        this.scopeCheckersByPrincipal = scopeCheckersByPrincipal;
     }
 
     checkAccess(request: FhirRequestDetails): AccessDecision {
@@ -83,31 +83,51 @@ export class PatientAccessCheckerService implements AccessChecker {
         return patientIds.size === 1 && patientIds.has(this.authorizedPatientId);
     }
 
+    private hasPermissionWithPrincipal(
+        principal: SmartScopePrincipal,
+        resourceName: string,
+        permission: SmartScopePermission,
+    ): boolean {
+        const checker = this.scopeCheckersByPrincipal.get(principal);
+        return checker?.hasPermission(resourceName, permission) ?? false;
+    }
+
+    private hasBroadPermission(resourceName: string, permission: SmartScopePermission): boolean {
+        return (
+            this.hasPermissionWithPrincipal(SmartScopePrincipal.SYSTEM, resourceName, permission) ||
+            this.hasPermissionWithPrincipal(SmartScopePrincipal.USER, resourceName, permission)
+        );
+    }
+
+    private hasPatientPermission(resourceName: string, permission: SmartScopePermission): boolean {
+        return this.hasPermissionWithPrincipal(SmartScopePrincipal.PATIENT, resourceName, permission);
+    }
+
+    private shouldUsePatientPrincipal(resourceName: string): boolean {
+        return this.authorizedPatientId !== null && this.patientFinder.isPatientCompartmentResource(resourceName);
+    }
+
     private processRead(request: FhirRequestDetails, resourceName: string): AccessDecision {
-        if (this.authorizedPatientId === null) {
-            return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.READ));
+        if (!this.shouldUsePatientPrincipal(resourceName)) {
+            return grantedAccessDecision(this.hasBroadPermission(resourceName, SmartScopePermission.READ));
         }
 
         const patientIds = isSameResourceType(resourceName, "Patient")
             ? this.patientFinder.findPatientsForAccessCheck(request.requestPath, request.queryParams)
             : this.patientFinder.findPatientsFromParams(request.requestPath, request.queryParams);
         return grantedAccessDecision(
-            this.validatePatientIds(patientIds) &&
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.READ),
+            this.validatePatientIds(patientIds) && this.hasPatientPermission(resourceName, SmartScopePermission.READ),
         );
     }
 
     private processSearch(request: FhirRequestDetails, resourceName: string): AccessDecision {
-        if (this.authorizedPatientId === null) {
-            return grantedAccessDecision(
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.SEARCH),
-            );
+        if (!this.shouldUsePatientPrincipal(resourceName)) {
+            return grantedAccessDecision(this.hasBroadPermission(resourceName, SmartScopePermission.SEARCH));
         }
 
         const patientIds = this.patientFinder.findPatientsForAccessCheck(request.requestPath, request.queryParams);
         return grantedAccessDecision(
-            this.validatePatientIds(patientIds) &&
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.SEARCH),
+            this.validatePatientIds(patientIds) && this.hasPatientPermission(resourceName, SmartScopePermission.SEARCH),
         );
     }
 
@@ -126,16 +146,13 @@ export class PatientAccessCheckerService implements AccessChecker {
             return deniedAccessDecision();
         }
 
-        const patientIds = this.patientFinder.findPatientsInResource(request.requestPath, body);
-        if (this.authorizedPatientId === null) {
-            return grantedAccessDecision(
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.CREATE),
-            );
+        if (!this.shouldUsePatientPrincipal(resourceName)) {
+            return grantedAccessDecision(this.hasBroadPermission(resourceName, SmartScopePermission.CREATE));
         }
 
+        const patientIds = this.patientFinder.findPatientsInResource(request.requestPath, body);
         return grantedAccessDecision(
-            patientIds.has(this.authorizedPatientId) &&
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.CREATE),
+            this.validatePatientIds(patientIds) && this.hasPatientPermission(resourceName, SmartScopePermission.CREATE),
         );
     }
 
@@ -167,16 +184,13 @@ export class PatientAccessCheckerService implements AccessChecker {
             return deniedAccessDecision();
         }
 
-        const patientIds = this.patientFinder.findPatientsForAccessCheck(request.requestPath, request.queryParams);
-        if (this.authorizedPatientId === null) {
-            return grantedAccessDecision(
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.DELETE),
-            );
+        if (!this.shouldUsePatientPrincipal(resourceName)) {
+            return grantedAccessDecision(this.hasBroadPermission(resourceName, SmartScopePermission.DELETE));
         }
 
+        const patientIds = this.patientFinder.findPatientsForAccessCheck(request.requestPath, request.queryParams);
         return grantedAccessDecision(
-            this.validatePatientIds(patientIds) &&
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.DELETE),
+            this.validatePatientIds(patientIds) && this.hasPatientPermission(resourceName, SmartScopePermission.DELETE),
         );
     }
 
@@ -185,10 +199,24 @@ export class PatientAccessCheckerService implements AccessChecker {
         resourceName: string,
         updateMethod: "PUT" | "PATCH",
     ): AccessDecision {
-        if (this.authorizedPatientId === null) {
-            return grantedAccessDecision(
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.UPDATE),
-            );
+        const body = request.requestBody;
+        if (!body) {
+            return deniedAccessDecision();
+        }
+
+        if (!this.shouldUsePatientPrincipal(resourceName)) {
+            if (
+                this.authorizedPatientId !== null &&
+                this.patientFinder.isPatientCompartmentResource(resourceName)
+            ) {
+                if (updateMethod === "PATCH") {
+                    this.patientFinder.findPatientsInPatch(body, resourceName);
+                }
+                if (updateMethod === "PUT") {
+                    this.patientFinder.findPatientsInResource(request.requestPath, body);
+                }
+            }
+            return grantedAccessDecision(this.hasBroadPermission(resourceName, SmartScopePermission.UPDATE));
         }
 
         const referencedPatientIds = this.patientFinder.findPatientsForAccessCheck(
@@ -200,12 +228,8 @@ export class PatientAccessCheckerService implements AccessChecker {
         }
 
         let patientIds = new Set<string>();
-        const body = request.requestBody;
 
         if (updateMethod === "PATCH") {
-            if (!body) {
-                return deniedAccessDecision();
-            }
             patientIds = this.patientFinder.findPatientsInPatch(body, resourceName);
             if (patientIds.size === 0) {
                 return grantedAccessDecision(true);
@@ -213,15 +237,11 @@ export class PatientAccessCheckerService implements AccessChecker {
         }
 
         if (updateMethod === "PUT") {
-            if (!body) {
-                return deniedAccessDecision();
-            }
             patientIds = this.patientFinder.findPatientsInResource(request.requestPath, body);
         }
 
         return grantedAccessDecision(
-            patientIds.has(this.authorizedPatientId) &&
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.UPDATE),
+            this.validatePatientIds(patientIds) && this.hasPatientPermission(resourceName, SmartScopePermission.UPDATE),
         );
     }
 
@@ -231,13 +251,13 @@ export class PatientAccessCheckerService implements AccessChecker {
             return deniedAccessDecision();
         }
 
-        if (this.authorizedPatientId === null) {
-            return grantedAccessDecision(this.smartScopeChecker.hasPermission("Patient", SmartScopePermission.UPDATE));
+        if (!this.shouldUsePatientPrincipal("Patient")) {
+            return grantedAccessDecision(this.hasBroadPermission("Patient", SmartScopePermission.UPDATE));
         }
 
         return grantedAccessDecision(
             this.authorizedPatientId === patientId &&
-                this.smartScopeChecker.hasPermission("Patient", SmartScopePermission.UPDATE),
+                this.hasPatientPermission("Patient", SmartScopePermission.UPDATE),
         );
     }
 
@@ -306,7 +326,10 @@ export class PatientAccessCheckerService implements AccessChecker {
                 if (!resourceType) {
                     return false;
                 }
-                return this.smartScopeChecker.hasPermission(resourceType, SmartScopePermission.CREATE);
+                if (this.shouldUsePatientPrincipal(resourceType)) {
+                    return this.hasPatientPermission(resourceType, SmartScopePermission.CREATE);
+                }
+                return this.hasBroadPermission(resourceType, SmartScopePermission.CREATE);
             }
             case "PUT": {
                 const url = bundleEntryRequest.url;
@@ -340,38 +363,53 @@ export class PatientAccessCheckerService implements AccessChecker {
         const pathParts = parsed.pathname.replace(/^\/+/, "").split("/").filter(Boolean);
         const resourceType = pathParts[0];
         if (!resourceType) {
-            return this.smartScopeChecker.hasPermission(url, permission);
+            return false;
         }
-        if (pathParts.length >= 2) {
-            return this.smartScopeChecker.hasPermission(resourceType, permission);
+
+        if (this.shouldUsePatientPrincipal(resourceType)) {
+            return this.hasPatientPermission(resourceType, permission);
         }
-        return this.smartScopeChecker.hasPermission(resourceType, permission);
+        return this.hasBroadPermission(resourceType, permission);
     }
 }
 
-function createSmartScopeCheckerFromJwt(scopesClaim: string, scopePrincipal: SmartScopePrincipal): SmartScopeChecker {
-    const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
-    return new SmartScopeChecker(scopes, scopePrincipal);
+function createSmartScopeCheckers(scopes: readonly SmartFhirScope[]): Map<SmartScopePrincipal, SmartScopeChecker> {
+    const checkers = new Map<SmartScopePrincipal, SmartScopeChecker>();
+    for (const principal of [SmartScopePrincipal.PATIENT, SmartScopePrincipal.USER, SmartScopePrincipal.SYSTEM]) {
+        checkers.set(principal, new SmartScopeChecker(scopes, principal));
+    }
+    return checkers;
 }
 
 export const patientAccessCheckerFactory: AccessCheckerFactory = {
     create(context: AccessCheckerCreateContext): AccessChecker {
         const scopesClaim = getJwtClaimOrFail(context.jwt.payload, SCOPES_CLAIM);
         const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
-        const scopePrincipal = resolveSmartScopePrincipal(scopes);
-        if (!scopePrincipal) {
+        if (scopes.length === 0) {
             throw new AuthenticationError("No SMART FHIR scopes found in JWT scope claim");
         }
 
-        let authorizedPatientId = null;
-        try {
-            authorizedPatientId = getJwtClaimIdOrFail(context.jwt.payload, PATIENT_CLAIM);
-        } catch {
-            // 無 patient claim 時，授權 patient id 為 null
-            authorizedPatientId = null;
+        const hasPatientScope = scopes.some((scope) => scope.principal === SmartScopePrincipal.PATIENT);
+        const hasBroadScope = scopes.some(
+            (scope) =>
+                scope.principal === SmartScopePrincipal.SYSTEM || scope.principal === SmartScopePrincipal.USER,
+        );
+
+        let authorizedPatientId: string | null = null;
+        if (hasPatientScope) {
+            try {
+                authorizedPatientId = getJwtClaimIdOrFail(context.jwt.payload, PATIENT_CLAIM);
+            } catch {
+                if (!hasBroadScope) {
+                    throw new AuthenticationError("Patient claim required for patient scopes");
+                }
+            }
         }
-        console.log("authorizedPatientId", authorizedPatientId);
-        const smartScopeChecker = createSmartScopeCheckerFromJwt(scopesClaim, scopePrincipal);
-        return new PatientAccessCheckerService(authorizedPatientId, context.patientFinder, smartScopeChecker);
+
+        return new PatientAccessCheckerService(
+            authorizedPatientId,
+            context.patientFinder,
+            createSmartScopeCheckers(scopes),
+        );
     },
 };

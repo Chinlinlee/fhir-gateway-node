@@ -51,6 +51,7 @@ describe("permissive access checker config", () => {
                     deletedPatients: new Set(),
                     patientsToCreate: false,
                 }),
+                isPatientCompartmentResource: () => false,
             },
         });
         expect(checker.checkAccess(buildFhirRequest("Patient/x")).canAccess()).toBe(true);

@@ -15,6 +15,7 @@ export type PatientFinderLike = {
     findPatientsInResource: (requestPath: string, requestBody: string) => Set<string>;
     findPatientsInPatch: (requestBody: string, resourceName: string) => Set<string>;
     findPatientsInBundle: (bundle: FhirBundle, options?: { strict?: boolean }) => BundlePatients;
+    isPatientCompartmentResource: (resourceName: string) => boolean;
 };
 
 /**

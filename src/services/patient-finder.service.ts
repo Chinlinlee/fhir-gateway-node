@@ -3,7 +3,6 @@ import { InvalidRequestError } from "../errors/invalid-request.error";
 import type { BundlePatients } from "../types/bundle-patients";
 import { BundlePatientsBuilder } from "../types/bundle-patients";
 import type { FhirBundle, FhirBundleEntry } from "../types/fhir-bundle";
-import { findPatientIdsInResource } from "../utils/fhir-path.util";
 import {
     checkFhirIdOrFail,
     isSameResourceType,
@@ -12,6 +11,7 @@ import {
     parseQueryString,
     parseResourcePath,
 } from "../utils/fhir.util";
+import { findPatientIdsInResource } from "../utils/fhir-path.util";
 import { readResourceJson } from "../utils/load-resource";
 
 const RESOURCE_ID_FIELD = "_id";
@@ -162,6 +162,10 @@ export class PatientFinderService {
             throw new InvalidRequestError("Invalid patch!");
         }
         return this.parseJsonArrayForPatch(patchArray, resourceName);
+    }
+
+    isPatientCompartmentResource(resourceName: string): boolean {
+        return isSameResourceType(resourceName, "Patient") || this.patientSearchParams.has(resourceName);
     }
 
     private getPatientIdsFromPatientUrl(resourceId: string | null, queryParams: Record<string, string[]>): Set<string> {

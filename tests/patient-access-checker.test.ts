@@ -5,14 +5,14 @@ import { InvalidRequestError } from "../src/errors/invalid-request.error";
 import {
     PATIENT_CLAIM,
     PatientAccessCheckerService,
-    SCOPES_CLAIM,
     patientAccessCheckerFactory,
+    SCOPES_CLAIM,
 } from "../src/services/access-checkers/patient-access-checker.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import {
+    extractSmartFhirScopesFromTokens,
     SmartScopeChecker,
     SmartScopePrincipal,
-    extractSmartFhirScopesFromTokens,
 } from "../src/services/smart-scope.service";
 import {
     DEFAULT_TEST_SCOPES_CLAIM,
@@ -25,14 +25,28 @@ import { buildFhirRequest } from "./helpers/fhir-request";
 
 function createPatientChecker(scopesClaim = DEFAULT_TEST_SCOPES_CLAIM): PatientAccessCheckerService {
     const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
-    const smartScopeChecker = new SmartScopeChecker(scopes, SmartScopePrincipal.PATIENT);
-    return new PatientAccessCheckerService(PATIENT_AUTHORIZED, PatientFinderService.getInstance(), smartScopeChecker);
+    return new PatientAccessCheckerService(
+        PATIENT_AUTHORIZED,
+        PatientFinderService.getInstance(),
+        new Map([
+            [SmartScopePrincipal.PATIENT, new SmartScopeChecker(scopes, SmartScopePrincipal.PATIENT)],
+            [SmartScopePrincipal.USER, new SmartScopeChecker(scopes, SmartScopePrincipal.USER)],
+            [SmartScopePrincipal.SYSTEM, new SmartScopeChecker(scopes, SmartScopePrincipal.SYSTEM)],
+        ]),
+    );
 }
 
 function createUserScopeChecker(scopesClaim: string): PatientAccessCheckerService {
     const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
-    const smartScopeChecker = new SmartScopeChecker(scopes, SmartScopePrincipal.USER);
-    return new PatientAccessCheckerService(null, PatientFinderService.getInstance(), smartScopeChecker);
+    return new PatientAccessCheckerService(
+        null,
+        PatientFinderService.getInstance(),
+        new Map([
+            [SmartScopePrincipal.PATIENT, new SmartScopeChecker(scopes, SmartScopePrincipal.PATIENT)],
+            [SmartScopePrincipal.USER, new SmartScopeChecker(scopes, SmartScopePrincipal.USER)],
+            [SmartScopePrincipal.SYSTEM, new SmartScopeChecker(scopes, SmartScopePrincipal.SYSTEM)],
+        ]),
+    );
 }
 
 function bundleBody(name: string): string {
@@ -329,9 +343,7 @@ describe("PatientAccessCheckerService", () => {
         });
 
         expect(
-            checker
-                .checkAccess(buildFhirRequest("Observation", { subject: [PATIENT_NON_AUTHORIZED] }))
-                .canAccess(),
+            checker.checkAccess(buildFhirRequest("Observation", { subject: [PATIENT_NON_AUTHORIZED] })).canAccess(),
         ).toBe(true);
     });
 
