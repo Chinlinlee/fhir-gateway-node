@@ -162,6 +162,37 @@ export function extractSmartFhirScopesFromTokens(tokens: readonly string[]): Sma
     return scopes;
 }
 
+/**
+ * 合併所有 principal 的 scope 權限（union）；不區分 user/patient/system level。
+ */
+export function mergeScopePermissionsByResourceType(
+    scopes: readonly SmartFhirScope[],
+): Map<string, Set<SmartScopePermission>> {
+    const permissionsByResourceType = new Map<string, Set<SmartScopePermission>>();
+
+    for (const scope of scopes) {
+        const existing = permissionsByResourceType.get(scope.resourceType) ?? new Set<SmartScopePermission>();
+        for (const permission of scope.permissions) {
+            existing.add(permission);
+        }
+        permissionsByResourceType.set(scope.resourceType, existing);
+    }
+
+    return permissionsByResourceType;
+}
+
+function hasMergedPermission(
+    permissionsByResourceType: ReadonlyMap<string, ReadonlySet<SmartScopePermission>>,
+    resourceType: string,
+    permission: SmartScopePermission,
+): boolean {
+    const resourcePermissions = permissionsByResourceType.get(resourceType) ?? new Set<SmartScopePermission>();
+    const wildcardPermissions =
+        permissionsByResourceType.get(ALL_RESOURCE_TYPES_WILDCARD) ?? new Set<SmartScopePermission>();
+
+    return resourcePermissions.has(permission) || wildcardPermissions.has(permission);
+}
+
 /** 僅評估指定 principal 的 scopes。 */
 export class SmartScopeChecker {
     private readonly permissionsByResourceType: Map<string, Set<SmartScopePermission>>;
@@ -183,10 +214,19 @@ export class SmartScopeChecker {
     }
 
     hasPermission(resourceType: string, permission: SmartScopePermission): boolean {
-        const resourcePermissions = this.permissionsByResourceType.get(resourceType) ?? new Set<SmartScopePermission>();
-        const wildcardPermissions =
-            this.permissionsByResourceType.get(ALL_RESOURCE_TYPES_WILDCARD) ?? new Set<SmartScopePermission>();
+        return hasMergedPermission(this.permissionsByResourceType, resourceType, permission);
+    }
+}
 
-        return resourcePermissions.has(permission) || wildcardPermissions.has(permission);
+/** 跨 principal 合併 cruds；用於 basic access checker。 */
+export class MergedSmartScopeChecker {
+    private readonly permissionsByResourceType: Map<string, Set<SmartScopePermission>>;
+
+    constructor(scopes: readonly SmartFhirScope[]) {
+        this.permissionsByResourceType = mergeScopePermissionsByResourceType(scopes);
+    }
+
+    hasPermission(resourceType: string, permission: SmartScopePermission): boolean {
+        return hasMergedPermission(this.permissionsByResourceType, resourceType, permission);
     }
 }

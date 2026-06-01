@@ -25,7 +25,7 @@ export const RUN_MODES = ["DEV", "PROD"] as const;
 export type RunMode = (typeof RUN_MODES)[number];
 
 // 內建插件名稱
-export const BUILTIN_ACCESS_CHECKERS = ["list", "patient"] as const;
+export const BUILTIN_ACCESS_CHECKERS = ["list", "patient", "basic"] as const;
 
 /**
  * 與 Java FhirProxyServer.AUDIT_EVENT_ACTION_CODES 一致。

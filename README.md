@@ -11,6 +11,14 @@
 - realm 請使用 `smart`
 - patient-based flow 需使用 `patient` claim（JWT claim key: `patient`）
 
+## Basic Access Checker（跨 principal 合併 CRUDS）
+
+`ACCESS_CHECKER=basic` 時：
+
+- JWT 必須含至少一個 SMART FHIR scope（`patient/`、`user/` 或 `system/`）
+- 不區分 principal level，將所有 scope 的 cruds 權限做 union 後依 HTTP method 驗證
+- 不檢查 `patient` claim 或病人參照
+
 ## Patient Access Checker Flow（SMART Patient-specific scopes）
 
 `ACCESS_CHECKER=patient` 時，gateway 會依 SMART scope principal 決定授權模式：
@@ -60,7 +68,7 @@ cp env.example .env
 - `PROXY_TO`：FHIR backend base URL（例如 `http://localhost:8081/fhir`）
 - `TOKEN_ISSUER`：OIDC issuer URL（例如 `http://localhost:9080/realms/smart`）
 - `BACKEND_TYPE`：`HAPI` 或 `GCP`
-- `ACCESS_CHECKER`：`list`、`patient` 或自訂 checker
+- `ACCESS_CHECKER`：`list`、`patient`、`basic` 或自訂 checker
 
 常用選填：
 

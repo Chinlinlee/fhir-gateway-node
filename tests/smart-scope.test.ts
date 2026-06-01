@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
     ALL_RESOURCE_TYPES_WILDCARD,
     extractSmartFhirScopesFromTokens,
+    MergedSmartScopeChecker,
     resolveSmartScopePrincipal,
     SmartScopeChecker,
     SmartScopePermission,
@@ -151,6 +152,31 @@ describe("resolveSmartScopePrincipal", () => {
 
     it("returns null when no FHIR scopes are present", () => {
         expect(resolveSmartScopePrincipal(extractSmartFhirScopesFromTokens(["openid", "launch/patient"]))).toBeNull();
+    });
+});
+
+describe("MergedSmartScopeChecker", () => {
+    it("merges permissions across principals for wildcard resource", () => {
+        const checker = new MergedSmartScopeChecker(
+            extractSmartFhirScopesFromTokens(["system/*.rs", "patient/*.crud"]),
+        );
+
+        expect(checker.hasPermission("Observation", SmartScopePermission.READ)).toBe(true);
+        expect(checker.hasPermission("Observation", SmartScopePermission.SEARCH)).toBe(true);
+        expect(checker.hasPermission("Observation", SmartScopePermission.CREATE)).toBe(true);
+        expect(checker.hasPermission("Observation", SmartScopePermission.UPDATE)).toBe(true);
+        expect(checker.hasPermission("Observation", SmartScopePermission.DELETE)).toBe(true);
+    });
+
+    it("merges resource-specific scopes with wildcard", () => {
+        const checker = new MergedSmartScopeChecker(
+            extractSmartFhirScopesFromTokens(["user/Observation.read", "patient/Observation.cr"]),
+        );
+
+        expect(checker.hasPermission("Observation", SmartScopePermission.READ)).toBe(true);
+        expect(checker.hasPermission("Observation", SmartScopePermission.SEARCH)).toBe(true);
+        expect(checker.hasPermission("Observation", SmartScopePermission.CREATE)).toBe(true);
+        expect(checker.hasPermission("Observation", SmartScopePermission.DELETE)).toBe(false);
     });
 });
 

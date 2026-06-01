@@ -1,5 +1,6 @@
 import { AuthenticationError } from "../errors/authentication.error";
 import type { AccessChecker, AccessCheckerCreateContext, AccessCheckerFactory } from "../types/access-checker";
+import { basicAccessCheckerFactory } from "./access-checkers/basic-access-checker.service";
 import { listAccessCheckerFactory } from "./access-checkers/list-access-checker.service";
 import { patientAccessCheckerFactory } from "./access-checkers/patient-access-checker.service";
 import { permissiveAccessCheckerFactory } from "./access-checkers/permissive-access-checker.service";
@@ -38,5 +39,6 @@ export function createDefaultAccessCheckerRegistry(): AccessCheckerRegistryServi
     registry.register("permissive", permissiveAccessCheckerFactory);
     registry.register("list", listAccessCheckerFactory);
     registry.register("patient", patientAccessCheckerFactory);
+    registry.register("basic", basicAccessCheckerFactory);
     return registry;
 }
