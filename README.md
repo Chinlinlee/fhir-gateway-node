@@ -223,8 +223,118 @@ cp env.example .env
 - `ALLOW_TOKEN_ISSUER_HOST_MISMATCH`：`true` 時，PROD 下允許 JWT `iss` 的 host 與 `TOKEN_ISSUER` 不同、但 realm path 相同（預設 `false`）
 - `PORT`：HTTP listen port（預設 `3000`）
 - `WELL_KNOWN_ENDPOINT`：預設 `.well-known/openid-configuration`
-- `ALLOWED_QUERIES_FILE`：Allowed Queries JSON 檔案路徑
+- `ALLOWED_QUERIES_FILE`：Allowed Queries JSON 檔案路徑（見下方 [Allowed Queries 設定檔](#allowed-queries-設定檔)）
 - `AUDIT_EVENT_ACTIONS_CONFIG`：AuditEvent action code 字串（例如 `CRUDE`）
+
+## Allowed Queries 設定檔
+
+Allowed Queries 是 query allow-list：請求的 path、HTTP method、query params 符合某個 entry 時，gateway **直接放行**，不執行 Access Checker（未驗證 entry 另可跳過 JWT）。對齊 Java 版 `AllowedQueriesConfig`。
+
+### 啟用方式
+
+`.env` 設定 `ALLOWED_QUERIES_FILE` 指向 JSON 檔：
+
+```bash
+ALLOWED_QUERIES_FILE=src/resources/hapi_page_url_allowed_queries.json
+```
+
+未設定或留空 → Allowed Queries **停用**，所有非 `metadata` 請求都走 JWT + Access Checker。
+
+### 檔案放置位置
+
+路徑為**程序啟動時的工作目錄（CWD）**下的相對路徑，或絕對路徑。
+
+| 情境 | 建議位置 | 範例 |
+| --- | --- | --- |
+| 本機開發 | 專案內 `src/resources/` | `src/resources/hapi_page_url_allowed_queries.json` |
+| 自訂設定 | 任意可讀路徑 | `/etc/fhir-gateway/allowed-queries.json` |
+| Docker | image 內 `src/resources/`（Dockerfile 已 COPY） | `src/resources/hapi_page_url_allowed_queries.json` |
+
+> 本機請在 `fhir-gateway-node/` 目錄下執行 `pnpm dev` / `pnpm start`，相對路徑才會正確解析。
+
+repo 內建範例：`src/resources/hapi_page_url_allowed_queries.json`（HAPI 分頁 `_getpages` URL）。更多範例見 `tests/fixtures/allowed-queries/`。
+
+### JSON 格式
+
+根物件必須含 `entries` 陣列；每個 entry 描述一組允許的請求條件：
+
+```json
+{
+    "entries": [
+        {
+            "path": "",
+            "queryParams": {
+                "_getpages": "ANY_VALUE"
+            },
+            "allowExtraParams": true,
+            "allParamsRequired": true
+        }
+    ]
+}
+```
+
+### Entry 欄位
+
+| 欄位 | 必填 | 預設 | 說明 |
+| --- | --- | --- | --- |
+| `path` | 是 | — | FHIR 相對路徑（不含 `/fhir` prefix）。空字串 `""` 表示根路徑。結尾 `/ANY_VALUE` 可匹配子路徑（如 `Composition/ANY_VALUE` → `Composition/abc`） |
+| `queryParams` | 否 | `{}` | 必須匹配的 query param。值為 `"ANY_VALUE"` 表示該 key 存在即可、不限值 |
+| `requestType` | 否 | 不限 | HTTP method（大小寫不敏感，如 `"GET"`） |
+| `allowExtraParams` | 否 | `false` | `true` 時允許請求帶 entry 未列出的額外 query param |
+| `allParamsRequired` | 否 | `false` | `true` 時 entry 列出的 query param 全部必須存在；`false` 時只檢查請求中已出現的 param |
+| `allowUnauthenticatedRequests` | 否 | `false` | `true` 時符合此 entry 的請求**不需 JWT** 即可放行 |
+
+### 常見範例
+
+**HAPI 分頁 URL（根路徑 + `_getpages`）**
+
+```json
+{
+    "entries": [
+        {
+            "path": "",
+            "queryParams": { "_getpages": "ANY_VALUE" },
+            "allowExtraParams": true,
+            "allParamsRequired": true
+        }
+    ]
+}
+```
+
+**允許未驗證存取特定資源 search**
+
+```json
+{
+    "entries": [
+        {
+            "path": "Composition",
+            "allowUnauthenticatedRequests": true,
+            "queryParams": { "_getpages": "ANY_VALUE" }
+        }
+    ]
+}
+```
+
+**限制 HTTP method + 禁止額外 param**
+
+```json
+{
+    "entries": [
+        {
+            "path": "Encounter",
+            "requestType": "GET",
+            "queryParams": {},
+            "allowExtraParams": false
+        }
+    ]
+}
+```
+
+### 與授權流程的關係
+
+- entry 設 `allowUnauthenticatedRequests: true` → 步驟 2 直接放行（無 JWT、無 Access Checker）
+- 其餘 entry → 須 JWT，步驟 4 匹配後直接放行（跳過 Access Checker）
+- 皆不匹配 → 進入 Access Checker
 
 ## 本機啟動（Local Development）
 
