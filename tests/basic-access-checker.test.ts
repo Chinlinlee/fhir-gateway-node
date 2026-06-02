@@ -16,6 +16,12 @@ function createBasicChecker(scopesClaim: string): BasicAccessCheckerService {
 }
 
 describe("BasicAccessCheckerService", () => {
+    it("denies search when scope resource does not match request resource", () => {
+        expect(createBasicChecker("patient/Patient.rs").checkAccess(buildFhirRequest("Observation")).canAccess()).toBe(
+            false,
+        );
+    });
+
     it("grants read when merged scopes include read from any principal", () => {
         expect(
             createBasicChecker("system/*.rs patient/Observation.crud")
