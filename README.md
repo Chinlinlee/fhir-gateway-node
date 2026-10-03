@@ -28,6 +28,16 @@ gateway 啟動時只抓一次 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 的 OIDC di
 
 仍為 Keycloak 專屬的設定：`ALLOW_TOKEN_ISSUER_HOST_MISMATCH`（依 Keycloak 的 `/realms/<name>` 路徑判斷 issuer 等價）。`TOKEN_ISSUER` 與 `WELL_KNOWN_ENDPOINT` 則是標準 OIDC 設定。
 
+### Issuer 比對（IssuerPolicy）
+
+「這個 gateway 信任哪些 issuer」由單一 `IssuerPolicy` 決定，依下列順位套用三個具名策略，先接受者勝出：
+
+1. **精確比對**：JWT 的 `iss` 與 `TOKEN_ISSUER` 完全相同即接受（`ALLOW_TOKEN_ISSUER_HOST_MISMATCH` 開啟時仍走這一條）。
+2. **開發模式容忍**：`RUN_MODE=DEV` 時接受不同的 `iss`，印出警告後以 token 自己的 issuer 驗簽（Android emulator 會帶不同 issuer）。
+3. **Keycloak realm pathname 等價**（**Keycloak 專屬**）：`ALLOW_TOKEN_ISSUER_HOST_MISMATCH=true` 時，若兩個 issuer URL 的 pathname 相同即視為等價，印出警告後以 token 自己的 issuer 驗簽。這是對 Keycloak 把 realm 名稱放在 URL path（`/realms/<name>`）的假設，**不是**通用的 issuer 等價規則。
+
+三個策略都不接受時回 401。策略只透過 `IssuerPolicy` 介面使用，其他呼叫端無法繞過 policy 單獨套用。
+
 ## Basic Access Checker（跨 principal 合併 CRUDS）
 
 `ACCESS_CHECKER=basic` 時：
