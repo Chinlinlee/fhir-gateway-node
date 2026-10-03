@@ -26,6 +26,7 @@ export type CreateAppOptions = {
     accessCheckerRegistry?: AccessCheckerRegistryService;
     patientFinder?: PatientFinderService;
     httpFhirClient?: HttpFhirClientService;
+    fhirBackend?: FhirBackendService;
     auditEventService?: AuditEventService;
 };
 
@@ -38,11 +39,13 @@ export const createApp = (options?: CreateAppOptions) => {
     }
 
     if (options?.tokenVerifier && options.config) {
+        const fhirBackend = options.fhirBackend ?? new FhirBackendService({ baseUrl: options.config.proxyTo });
         app.use(
             fhirRoute({
                 config: options.config,
                 tokenVerifier: options.tokenVerifier,
                 launchContextProvider: options.launchContextProvider ?? defaultLaunchContextProvider,
+                fhirBackend,
                 allowedQueries:
                     options.allowedQueries ??
                     AllowedQueriesCheckerService.loadFromFile(options.config.allowedQueriesFile),
@@ -55,9 +58,7 @@ export const createApp = (options?: CreateAppOptions) => {
                         backendType: options.config.backendType,
                         ...(gcpTokenProvider ? { getGcpAccessToken: () => gcpTokenProvider.getAccessToken() } : {}),
                     }),
-                auditEventService:
-                    options.auditEventService ??
-                    new AuditEventService(new FhirBackendService({ baseUrl: options.config.proxyTo })),
+                auditEventService: options.auditEventService ?? new AuditEventService(fhirBackend),
             }),
         );
     }

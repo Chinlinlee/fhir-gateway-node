@@ -13,6 +13,7 @@ import type { PatientFinderService } from "../services/patient-finder.service";
 import type { TokenVerifierService } from "../services/token-verifier.service";
 import { type AccessDecision, defaultUserWhoFromJwt } from "../types/access-decision";
 import type { FhirRequestDetails, FhirRequestMethod } from "../types/fhir-request";
+import type { AsyncFhirClientLike } from "../types/http-fhir-client";
 import type { LaunchContextProvider } from "../types/launch-context";
 import type { VerifiedJwt } from "../types/verified-jwt";
 import { applyGzipResponseHeaders, decodeCompressedBody } from "../utils/compression.util";
@@ -28,6 +29,8 @@ type FhirProxyControllerDeps = {
     allowedQueries: AllowedQueriesCheckerService;
     accessCheckerRegistry: AccessCheckerRegistryService;
     patientFinder: PatientFinderService;
+    /** 非同步 FHIR client；list checker 於 prepare 階段用它查詢 backend。 */
+    fhirBackend?: AsyncFhirClientLike;
     auditEventService?: AuditEventService;
 };
 
@@ -152,19 +155,22 @@ function buildRequestDetails(
     };
 }
 
-function postProcessResponseBody(
+async function postProcessResponseBody(
     requestPath: string,
     responseBody: string,
     accessDecision: AccessDecision,
     requestDetails: FhirRequestDetails,
     responseStatus: number,
-): string {
+): Promise<string> {
     let body = responseBody;
     if (requestPath === "metadata") {
         body = enrichCapabilityStatementSecurity(body);
     }
     try {
-        const postProcessed = accessDecision.postProcess?.(requestDetails, { status: responseStatus, body });
+        const postProcessed = await accessDecision.postProcess?.(requestDetails, {
+            status: responseStatus,
+            body,
+        });
         if (typeof postProcessed === "string") {
             return postProcessed;
         }
@@ -246,7 +252,9 @@ export abstract class FhirProxyController {
                         const checker = deps.accessCheckerRegistry.create(deps.config.accessChecker, {
                             launch,
                             patientFinder: deps.patientFinder,
+                            ...(deps.fhirBackend ? { fhirBackend: deps.fhirBackend } : {}),
                         });
+                        await checker.prepare?.(authenticatedRequest);
                         checkerDecision = checker.checkAccess(authenticatedRequest);
                     } catch (error) {
                         if (error instanceof InvalidRequestError) {
@@ -286,7 +294,7 @@ export abstract class FhirProxyController {
 
         const decodedBodyBytes = decodeCompressedBody(forwarded.bodyBytes, forwarded.headers.get("content-encoding"));
         const rawResponseBody = Buffer.from(decodedBodyBytes).toString("utf8");
-        let responseBody = postProcessResponseBody(
+        let responseBody = await postProcessResponseBody(
             requestPath,
             rawResponseBody,
             accessDecision,

@@ -21,8 +21,16 @@ export type AuditUserWho = {
 
 export type AccessDecision = {
     canAccess: () => boolean;
+    /**
+     * postProcess 可能需要等待 backend 寫入（例如把新建立的 Patient 加回 access List），
+     * 因此允許回傳 Promise；呼叫端必須 await。
+     * May be asynchronous because it can write back to the backend.
+     */
     getRequestMutation?: (request: FhirRequestDetails) => RequestMutation | null | undefined;
-    postProcess?: (request: FhirRequestDetails, response: FhirProxyResponse) => string | null | undefined;
+    postProcess?: (
+        request: FhirRequestDetails,
+        response: FhirProxyResponse,
+    ) => string | null | undefined | Promise<string | null | undefined>;
     getUserWho?: (request: FhirRequestDetails) => AuditUserWho | null | undefined;
 };
 

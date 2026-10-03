@@ -12,6 +12,7 @@ import type { FhirRequestDetails } from "../../types/fhir-request";
 import type { HttpFhirClientLike } from "../../types/http-fhir-client";
 import { getResourceIdOrNull, isSameResourceType, isValidFhirId, parseResourcePath } from "../../utils/fhir.util";
 import { getLaunchIdOrFail } from "../../utils/launch-context.util";
+import { CachedFhirClient } from "./cached-fhir-client";
 import {
     accessGrantedAndUpdateListForBundle,
     accessGrantedAndUpdateListForPatient,
@@ -25,6 +26,9 @@ import {
     toPatientReferenceQueries,
 } from "./list-access-checker.util";
 
+/** 預載最多迭代幾輪；每輪可能因查詢結果改變分支而產生新查詢。 */
+const MAX_PREPARE_ROUNDS = 8;
+
 export class ListAccessCheckerService implements AccessChecker {
     private readonly httpFhirClient: HttpFhirClientLike;
     private readonly patientListId: string;
@@ -34,6 +38,29 @@ export class ListAccessCheckerService implements AccessChecker {
         this.httpFhirClient = httpFhirClient;
         this.patientListId = patientListId;
         this.patientFinder = patientFinder;
+    }
+
+    /**
+     * 同步 checkAccess 需要 backend 的 FHIR List membership；真正的請求在此非同步階段完成。
+     * Resolve the backend queries the synchronous checkAccess needs, before it runs.
+     */
+    async prepare(request: FhirRequestDetails): Promise<void> {
+        const client = this.httpFhirClient;
+        if (!client.warm) {
+            return;
+        }
+
+        for (let round = 0; round < MAX_PREPARE_ROUNDS; round += 1) {
+            const resolvedNewQueries = await client.warm(() => {
+                this.checkAccess(request);
+            });
+            if (!resolvedNewQueries) {
+                return;
+            }
+        }
+
+        // 迭代未收斂代表 membership 無法判定；拒絕而不是放行。
+        throw new AuthenticationError("ListAccessChecker could not resolve the patient list membership");
     }
 
     checkAccess(request: FhirRequestDetails): AccessDecision {
@@ -283,12 +310,12 @@ export class ListAccessCheckerService implements AccessChecker {
 
 export const listAccessCheckerFactory: AccessCheckerFactory = {
     create(context: AccessCheckerCreateContext): AccessChecker {
-        const httpFhirClient = context.httpFhirClient;
-        if (!httpFhirClient) {
-            throw new AuthenticationError("ListAccessChecker requires httpFhirClient");
+        const fhirBackend = context.fhirBackend;
+        if (!fhirBackend) {
+            throw new AuthenticationError("ListAccessChecker requires fhirBackend");
         }
 
         const patientListId = getLaunchIdOrFail(context.launch, "patientListId");
-        return new ListAccessCheckerService(httpFhirClient, patientListId, context.patientFinder);
+        return new ListAccessCheckerService(new CachedFhirClient(fhirBackend), patientListId, context.patientFinder);
     },
 };
