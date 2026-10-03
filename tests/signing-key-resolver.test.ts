@@ -399,7 +399,10 @@ describe("signing key rotation", () => {
         issuer.setJwksAvailability("unreachable");
 
         const rotated = await issuer.rotateSigningKey();
-        const response = await readPatient(app, await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid));
+        const response = await readPatient(
+            app,
+            await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid),
+        );
 
         expect(response.status).toBe(401);
     });
@@ -410,7 +413,10 @@ describe("signing key rotation", () => {
         const app = await startGateway(issuer, upstream, "keycloak-public-key");
 
         const rotated = await issuer.rotateSigningKey();
-        const response = await readPatient(app, await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid));
+        const response = await readPatient(
+            app,
+            await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid),
+        );
 
         expect(response.status).toBe(401);
         // legacy adapter 的金鑰在啟動時載入一次，不會因為輪替而重新抓
