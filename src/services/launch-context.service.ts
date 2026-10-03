@@ -44,8 +44,7 @@ export class DefaultLaunchContextProvider implements LaunchContextProvider {
         const tokenId = claimAsString(payload, LAUNCH_CLAIM_NAMES.tokenId);
         const subject = claimAsString(payload, LAUNCH_CLAIM_NAMES.subject);
         const displayName =
-            claimAsString(payload, LAUNCH_CLAIM_NAMES.subjectName) ??
-            claimAsString(payload, LAUNCH_CLAIM_NAMES.name);
+            claimAsString(payload, LAUNCH_CLAIM_NAMES.subjectName) ?? claimAsString(payload, LAUNCH_CLAIM_NAMES.name);
         const scopesClaim = claimValue(payload, LAUNCH_CLAIM_NAMES.scopes);
 
         return {

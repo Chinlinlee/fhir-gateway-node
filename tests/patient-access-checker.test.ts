@@ -21,8 +21,8 @@ import {
     readAccessCheckerBundleFromPatientFinder,
     readAccessCheckerFixture,
 } from "./helpers/access-checker-fixture";
-import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 import { buildFhirRequest } from "./helpers/fhir-request";
+import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 
 function createPatientChecker(scopesClaim = DEFAULT_TEST_SCOPES_CLAIM): PatientAccessCheckerService {
     const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));

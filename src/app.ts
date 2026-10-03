@@ -56,7 +56,8 @@ export const createApp = (options?: CreateAppOptions) => {
                         ...(gcpTokenProvider ? { getGcpAccessToken: () => gcpTokenProvider.getAccessToken() } : {}),
                     }),
                 auditEventService:
-                    options.auditEventService ?? new AuditEventService(new FhirBackendService({ baseUrl: options.config.proxyTo })),
+                    options.auditEventService ??
+                    new AuditEventService(new FhirBackendService({ baseUrl: options.config.proxyTo })),
             }),
         );
     }

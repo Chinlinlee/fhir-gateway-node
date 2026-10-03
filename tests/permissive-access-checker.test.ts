@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { ConfigError, loadGatewayConfig, minimalValidEnv } from "../src/configs";
 import { createDefaultAccessCheckerRegistry } from "../src/services/access-checker-registry.service";
 import { PermissiveAccessCheckerService } from "../src/services/access-checkers/permissive-access-checker.service";
-import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 import { buildFhirRequest } from "./helpers/fhir-request";
+import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 
 describe("PermissiveAccessCheckerService", () => {
     it("grants access for any request", () => {

@@ -8,8 +8,8 @@ import {
 import { SCOPES_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { extractSmartFhirScopesFromTokens, MergedSmartScopeChecker } from "../src/services/smart-scope.service";
-import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 import { buildFhirRequest } from "./helpers/fhir-request";
+import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 
 function createBasicChecker(scopesClaim: string): BasicAccessCheckerService {
     const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));

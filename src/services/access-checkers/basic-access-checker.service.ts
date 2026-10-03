@@ -43,14 +43,10 @@ export class BasicAccessCheckerService implements AccessChecker {
         }
 
         if (resourceId) {
-            return grantedAccessDecision(
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.READ),
-            );
+            return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.READ));
         }
 
-        return grantedAccessDecision(
-            this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.SEARCH),
-        );
+        return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.SEARCH));
     }
 
     private processPost(request: FhirRequestDetails): AccessDecision {
@@ -67,9 +63,7 @@ export class BasicAccessCheckerService implements AccessChecker {
             return deniedAccessDecision();
         }
 
-        return grantedAccessDecision(
-            this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.CREATE),
-        );
+        return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.CREATE));
     }
 
     private processUpdate(request: FhirRequestDetails): AccessDecision {
@@ -95,9 +89,7 @@ export class BasicAccessCheckerService implements AccessChecker {
             return deniedAccessDecision();
         }
 
-        return grantedAccessDecision(
-            this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.UPDATE),
-        );
+        return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.UPDATE));
     }
 
     private processDelete(request: FhirRequestDetails): AccessDecision {
@@ -110,9 +102,7 @@ export class BasicAccessCheckerService implements AccessChecker {
             return deniedAccessDecision();
         }
 
-        return grantedAccessDecision(
-            this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.DELETE),
-        );
+        return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.DELETE));
     }
 
     private processBundle(request: FhirRequestDetails): AccessDecision {

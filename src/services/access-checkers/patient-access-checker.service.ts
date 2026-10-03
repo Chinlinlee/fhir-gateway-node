@@ -209,10 +209,7 @@ export class PatientAccessCheckerService implements AccessChecker {
         }
 
         if (!this.shouldUsePatientPrincipal(resourceName)) {
-            if (
-                this.authorizedPatientId !== null &&
-                this.patientFinder.isPatientCompartmentResource(resourceName)
-            ) {
+            if (this.authorizedPatientId !== null && this.patientFinder.isPatientCompartmentResource(resourceName)) {
                 if (updateMethod === "PATCH") {
                     this.patientFinder.findPatientsInPatch(body, resourceName);
                 }
@@ -260,8 +257,7 @@ export class PatientAccessCheckerService implements AccessChecker {
         }
 
         return grantedAccessDecision(
-            this.authorizedPatientId === patientId &&
-                this.hasPatientPermission("Patient", SmartScopePermission.UPDATE),
+            this.authorizedPatientId === patientId && this.hasPatientPermission("Patient", SmartScopePermission.UPDATE),
         );
     }
 
@@ -394,8 +390,7 @@ export const patientAccessCheckerFactory: AccessCheckerFactory = {
 
         const hasPatientScope = scopes.some((scope) => scope.principal === SmartScopePrincipal.PATIENT);
         const hasBroadScope = scopes.some(
-            (scope) =>
-                scope.principal === SmartScopePrincipal.SYSTEM || scope.principal === SmartScopePrincipal.USER,
+            (scope) => scope.principal === SmartScopePrincipal.SYSTEM || scope.principal === SmartScopePrincipal.USER,
         );
 
         let authorizedPatientId: string | null = null;

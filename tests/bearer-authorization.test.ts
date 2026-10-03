@@ -1,18 +1,18 @@
 import { createServer, type Server } from "node:http";
 import { gunzipSync } from "node:zlib";
 
-import { SignJWT, type CryptoKey } from "jose";
+import { type CryptoKey, SignJWT } from "jose";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
-import type { AccessChecker, AccessCheckerFactory } from "../src/types/access-checker";
 import { createDefaultAccessCheckerRegistry } from "../src/services/access-checker-registry.service";
-import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
 import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
+import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
+import type { AccessChecker, AccessCheckerFactory } from "../src/types/access-checker";
 import { allowedQueriesFixturePath } from "./helpers/allowed-queries-fixture";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
 

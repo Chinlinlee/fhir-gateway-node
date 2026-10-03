@@ -11,9 +11,9 @@ import type { AuditEventService } from "../services/audit-event.service";
 import type { HttpFhirClientService } from "../services/http-fhir-client.service";
 import type { PatientFinderService } from "../services/patient-finder.service";
 import type { TokenVerifierService } from "../services/token-verifier.service";
-import { defaultUserWhoFromJwt, type AccessDecision } from "../types/access-decision";
+import { type AccessDecision, defaultUserWhoFromJwt } from "../types/access-decision";
 import type { FhirRequestDetails, FhirRequestMethod } from "../types/fhir-request";
-import type { LaunchContext, LaunchContextProvider } from "../types/launch-context";
+import type { LaunchContextProvider } from "../types/launch-context";
 import type { VerifiedJwt } from "../types/verified-jwt";
 import { applyGzipResponseHeaders, decodeCompressedBody } from "../utils/compression.util";
 import { parseResourcePath } from "../utils/fhir.util";
@@ -208,9 +208,7 @@ export abstract class FhirProxyController {
             } else {
                 const authHeader = request.headers.get("authorization");
                 if (!authHeader) {
-                    console.error(
-                        `[fhir-proxy] 401 ${method} ${requestPath}: missing Authorization header`,
-                    );
+                    console.error(`[fhir-proxy] 401 ${method} ${requestPath}: missing Authorization header`);
                     return createOperationOutcome(401, "login", "No Authorization header provided!");
                 }
 
@@ -252,9 +250,7 @@ export abstract class FhirProxyController {
                         checkerDecision = checker.checkAccess(authenticatedRequest);
                     } catch (error) {
                         if (error instanceof InvalidRequestError) {
-                            console.error(
-                                `[fhir-proxy] 400 ${method} ${requestPath}: ${error.message}`,
-                            );
+                            console.error(`[fhir-proxy] 400 ${method} ${requestPath}: ${error.message}`);
                             return createOperationOutcome(400, "forbidden", error.message);
                         }
                         const diagnostics =
@@ -288,10 +284,7 @@ export abstract class FhirProxyController {
             body: bodyBytes,
         });
 
-        const decodedBodyBytes = decodeCompressedBody(
-            forwarded.bodyBytes,
-            forwarded.headers.get("content-encoding"),
-        );
+        const decodedBodyBytes = decodeCompressedBody(forwarded.bodyBytes, forwarded.headers.get("content-encoding"));
         const rawResponseBody = Buffer.from(decodedBodyBytes).toString("utf8");
         let responseBody = postProcessResponseBody(
             requestPath,

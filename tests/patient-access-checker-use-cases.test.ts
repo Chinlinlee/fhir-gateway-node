@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import { patientAccessCheckerFactory } from "../src/services/access-checkers/patient-access-checker.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { PATIENT_AUTHORIZED, PATIENT_NON_AUTHORIZED } from "./helpers/access-checker-fixture";
-import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 import { buildFhirRequest } from "./helpers/fhir-request";
+import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 
 describe("PatientAccessChecker use cases", () => {
     it("supports mixed system and patient scopes by resource type", () => {
