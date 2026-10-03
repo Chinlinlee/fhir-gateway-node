@@ -64,6 +64,8 @@ export const createApp = (options?: CreateAppOptions) => {
                     new HttpFhirClientService({
                         proxyTo: config.proxyTo,
                         backendType: config.backendType,
+                        // GCP 轉發與後端查詢共用同一組 ADC；未提供時建構即失敗。
+                        ...(gcpTokenProvider ? { getGcpAccessToken: () => gcpTokenProvider.getAccessToken() } : {}),
                     }),
                 ...(options.auditEventService || !fhirBackend
                     ? {}

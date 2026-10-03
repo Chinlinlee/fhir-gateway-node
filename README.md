@@ -228,7 +228,7 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 
 **GCP 部署的 backend 憑證**
 
-`BACKEND_TYPE=GCP` 時，轉發請求、list mode 的 FHIR List membership 查詢、以及把新建成 Patient 加回 access List 的 PATCH，都使用同一組 ADC（Application Default Credentials）access token。token 會過期，因此每次請求前重新解析。gateway 取不到 ADC 時（metadata server 故障、service account 不存在等）該請求以 **503** 收場，不是 401：這是 gateway 自己的故障，重新登入不可能修好。`google-auth-library` 的原始錯誤訊息可能帶著本機檔案路徑，因此只寫進 server log，對外只回固定的 `BackendCredentialError` 訊息。
+`BACKEND_TYPE=GCP` 時，轉發請求、list mode 的 FHIR List membership 查詢、以及把新建成 Patient 加回 access List 的 PATCH，都使用同一組 ADC（Application Default Credentials）access token。token 會過期，因此每次請求前重新解析；轉發用的 token 在**送出前**才解析，授權階段的 backend 查詢則在 checker `prepare` 期間解析，兩者都走同一個分類。gateway 取不到 ADC 時（metadata server 故障、service account 不存在等）該請求以 **503** 收場，不是 401：這是 gateway 自己的故障，重新登入不可能修好。`google-auth-library` 的原始錯誤訊息可能帶著本機檔案路徑，因此只寫進 server log，對外只回固定的 `BackendCredentialError` 訊息。upstream FHIR 自己的失敗（5xx、連線失敗）維持原本的狀態與內容，不會被當成憑證故障。
 
 **SMART Scope**
 

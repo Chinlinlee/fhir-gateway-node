@@ -41,12 +41,19 @@ type UpstreamServer = {
     close: () => Promise<void>;
 };
 
-async function startUpstreamServer(): Promise<UpstreamServer> {
+async function startUpstreamServer(
+    respond: (requestPath: string) => { status: number; body: string } = () => ({
+        status: 200,
+        body: JSON.stringify({ resourceType: "Patient", id: PATIENT_ID }),
+    }),
+): Promise<UpstreamServer> {
     const proxiedPaths: string[] = [];
     const server: Server = createServer((req, res) => {
-        proxiedPaths.push(new URL(req.url ?? "/", "http://127.0.0.1").pathname);
-        res.writeHead(200, { "content-type": "application/fhir+json" });
-        res.end(JSON.stringify({ resourceType: "Patient", id: PATIENT_ID }));
+        const requestPath = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
+        proxiedPaths.push(requestPath);
+        const { status, body } = respond(requestPath);
+        res.writeHead(status, { "content-type": "application/fhir+json" });
+        res.end(body);
     });
 
     await new Promise<void>((resolve) => {
@@ -237,5 +244,130 @@ describe("gateway-side backend credential outage over the app seam", () => {
         const serverLog = logged.mock.calls.map((call) => String(call[0])).join("\n");
         expect(serverLog).toContain("cannot obtain an ADC access token");
         expect(serverLog).toContain(missingCredentials);
+    });
+});
+
+/**
+ * 轉發階段才解析的憑證：`permissive` checker 完全不碰 `fhirBackend`，所以 ADC 故障
+ * 只可能發生在 `HttpFhirClientService.handleRequest` 取 token 的那一刻 ——
+ * 也就是舊版會回 500 並夾帶 google-auth-library 絕對路徑的那條路徑。
+ */
+describe("gateway-side backend credential outage on the forwarding path", () => {
+    let issuer: IssuerTestServer;
+    let upstream: UpstreamServer;
+    let tokenVerifier: TokenVerifierService;
+
+    beforeEach(async () => {
+        issuer = await startIssuerTestServer("test");
+        upstream = await startUpstreamServer();
+        tokenVerifier = await TokenVerifierService.create({
+            tokenIssuer: issuer.issuerUrl,
+            wellKnownEndpoint: issuer.wellKnownPath,
+            runMode: "PROD",
+            allowTokenIssuerHostMismatch: false,
+        });
+    });
+
+    afterEach(async () => {
+        vi.restoreAllMocks();
+        await issuer.close();
+        await upstream.close();
+    });
+
+    function createConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
+        return {
+            proxyTo: upstream.baseUrl,
+            tokenIssuer: issuer.issuerUrl,
+            backendType: "GCP",
+            accessChecker: "permissive",
+            auditEventActions: [],
+            wellKnownEndpoint: issuer.wellKnownPath,
+            runMode: "PROD",
+            allowTokenIssuerHostMismatch: false,
+            port: 3000,
+            ...overrides,
+        };
+    }
+
+    async function signJwt(): Promise<string> {
+        return await new SignJWT({ scope: "patient/Patient.read" })
+            .setProtectedHeader({ alg: "RS256", kid: issuer.keys.kid })
+            .setIssuer(issuer.issuerUrl)
+            .setSubject("gateway-user")
+            .setExpirationTime("5m")
+            .sign(issuer.keys.privateKey);
+    }
+
+    it("answers a forwarding-time credential outage with 503 instead of a 500 leaking the ADC file path", async () => {
+        const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const app = createApp({
+            tokenVerifier,
+            config: createConfig(),
+            httpFhirClient: new HttpFhirClientService({
+                proxyTo: upstream.baseUrl,
+                backendType: "GCP",
+                getGcpAccessToken: brokenGcpAccessToken,
+            }),
+        });
+        const jwt = await signJwt();
+
+        const response = await readPatient(app, jwt);
+
+        expect(response.status).toBe(503);
+        const raw = await response.text();
+        // 對外不可出現 google-auth-library 的絕對路徑（舊版會以 500 夾帶出去）
+        expect(raw).not.toContain(ADC_CREDENTIALS_PATH);
+        expect(raw).not.toContain("GOOGLE_APPLICATION_CREDENTIALS");
+        const body = JSON.parse(raw) as { issue?: Array<{ code?: string; diagnostics?: string }> };
+        expect(body.issue?.[0]?.code).toBe("transient");
+        expect(body.issue?.[0]?.diagnostics).toBe(BACKEND_CREDENTIAL_UNAVAILABLE_MESSAGE);
+        // 原始原因（含檔案路徑）留在 server log，並且這次請求是以 5xx 紀錄，不是 401
+        expect(logged).toHaveBeenCalledWith(expect.stringContaining("[fhir-proxy] 503"));
+        expect(logged).toHaveBeenCalledWith(expect.stringContaining(ADC_CREDENTIALS_PATH));
+        expect(logged).not.toHaveBeenCalledWith(expect.stringContaining("[fhir-proxy] 401"));
+        // 憑證都取不到，根本不該打到 FHIR upstream
+        expect(upstream.proxiedPaths).toEqual([]);
+    });
+
+    it("still forwards an upstream FHIR failure with the upstream status and body", async () => {
+        vi.spyOn(console, "error").mockImplementation(() => undefined);
+        await upstream.close();
+        upstream = await startUpstreamServer(() => ({
+            status: 500,
+            body: JSON.stringify({ resourceType: "OperationOutcome", issue: [{ code: "exception" }] }),
+        }));
+        const app = createApp({
+            tokenVerifier,
+            config: createConfig(),
+            httpFhirClient: new HttpFhirClientService({
+                proxyTo: upstream.baseUrl,
+                backendType: "GCP",
+                getGcpAccessToken: async () => "gateway-access-token",
+            }),
+        });
+        const jwt = await signJwt();
+
+        const response = await readPatient(app, jwt);
+
+        // upstream 自己的 5xx 維持原樣，不可被誤判成 gateway 憑證故障
+        expect(response.status).toBe(500);
+        const raw = await response.text();
+        expect(raw).not.toContain(BACKEND_CREDENTIAL_UNAVAILABLE_MESSAGE);
+        expect(JSON.parse(raw)).toMatchObject({ resourceType: "OperationOutcome" });
+        expect(upstream.proxiedPaths).toEqual([`/fhir/Patient/${PATIENT_ID}`]);
+    });
+
+    it("wires the GCP access token provider through the production bootstrap", async () => {
+        vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const config = createConfig();
+        // 不注入 httpFhirClient：走 `createApp` 預設的建構路徑，`BACKEND_TYPE=GCP` 必須可啟動。
+        const app = createApp({ tokenVerifier, config });
+        const jwt = await signJwt();
+
+        const response = await readPatient(app, jwt);
+
+        // 測試環境沒有 ADC，因此以 503 收場 —— 證明 provider 有被接上，而不是建構期就炸掉。
+        expect(response.status).toBe(503);
+        expect(await response.text()).not.toContain("GCP backend requires getGcpAccessToken provider");
     });
 });
