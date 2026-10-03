@@ -11,6 +11,7 @@ async function main(): Promise<void> {
         wellKnownEndpoint: config.wellKnownEndpoint,
         runMode: config.runMode,
         allowTokenIssuerHostMismatch: config.allowTokenIssuerHostMismatch,
+        signingKeySource: config.signingKeySource,
     });
 
     createApp({ tokenVerifier, config }).listen(config.port, ({ hostname, port }) => {
