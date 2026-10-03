@@ -22,10 +22,12 @@ gateway 啟動時只抓一次 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 的 OIDC di
 | `keycloak-public-key` | 只走 legacy 路徑；issuer root URL 沒有 `public_key` 時啟動失敗 |
 
 - `jwks`（標準路徑）：以 `jwks_uri` 的 JWKS 驗簽，依 token 的 `kid` 選金鑰。任何標準 OIDC provider（Keycloak、Logto、Casdoor、Auth0、Entra…）都可直接使用。
-- `jwks` 路徑支援**金鑰輪替**：遇到 token 帶了 gateway 尚未見過的 `kid` 時，會重新抓一次 JWKS 再選一次金鑰，因此 IdP 換金鑰不需重啟 gateway。同一個 `kid` 只會重新抓一次；IdP 在重新抓取期間連不上時該請求以 401 收場。
+- `jwks` 路徑支援**金鑰輪替**：遇到 token 帶了 gateway 尚未見過的 `kid` 時，會重新抓一次 JWKS 再選一次金鑰，因此 IdP 換金鑰不需重啟 gateway。IdP 在重新抓取期間連不上時該請求以 401 收場。
+- 未知 `kid` 的重新抓取有**速率上限**：`jose` 是以**未驗證**的 protected header 選金鑰，因此任何語法合法的 JWT 帶著任意的 `kid` 都會觸發重新抓取。gateway 在 60 秒內最多為 5 個未知 `kid` 對外抓取 JWKS，超過就直接 401（不再對外連線）；時間窗過去後恢復正常輪替。
+- `kid` 缺漏時：JWKS 只發布**一把**可用金鑰就用它驗簽（與 legacy `keycloak-public-key` adapter 忽略 `kid` 的行為一致）；發布**多把**時無法唯一決定用哪一把驗簽，一律 401。
 - `keycloak-public-key`（legacy adapter）：GET `TOKEN_ISSUER` 的 **root URL**，解析 Keycloak 專屬的 `public_key`（base64 SPKI DER）。保留給既有 Keycloak 部署。
 - 明確選擇的路徑不可用時**不會**靜默退回另一條路徑，啟動會直接失敗並在訊息中指名 `SIGNING_KEY_SOURCE`。
-- IdP 無法連線時會依啟動重試（3 次）後失敗，訊息指名 `TOKEN_ISSUER` 並附上原始原因。
+- IdP 無法連線時會依啟動重試（3 次）後失敗。抓 OIDC discovery document 失敗時訊息指名 `TOKEN_ISSUER`；抓 `jwks_uri` 失敗時訊息指名 `SIGNING_KEY_SOURCE`（因為出問題的是驗簽金鑰來源），兩者都附上原始原因。
 
 仍為 Keycloak 專屬的設定：`ALLOW_TOKEN_ISSUER_HOST_MISMATCH`（依 Keycloak 的 `/realms/<name>` 路徑判斷 issuer 等價）。`TOKEN_ISSUER` 與 `WELL_KNOWN_ENDPOINT` 則是標準 OIDC 設定。
 
@@ -104,7 +106,7 @@ Access Checker 是 gateway 在 JWT 驗證通過、且 Allowed Queries 未放行�
 
 | 類型 | 說明 |
 | --- | --- |
-| `AccessChecker` | 每個請求建立一個實例；實作 `checkAccess(request)` |
+| `AccessChecker` | 每個請求建立一個實例；實作 `checkAccess(request)`，可選實作 `prepare(request)`（見下方 [fhirBackend](#access-checker)） |
 | `AccessCheckerFactory` | thread-safe；從 LaunchContext 等 context 建立 `AccessChecker` |
 | `AccessCheckerCreateContext` | Factory 可用依賴：`launch`、`patientFinder`、（選用）`fhirBackend` |
 | `FhirRequestDetails` | 請求摘要：`requestPath`、`requestType`、`queryParams`、`requestBody?` |
@@ -219,6 +221,14 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 **fhirBackend**（非同步，供 checker 在授權前查詢 backend）
 
 若 checker 需在授權階段查詢 backend（如 `list` checker 驗證 FHIR List membership），Factory 可取用 context 的 `fhirBackend`。`checkAccess` 是同步契約，因此實際的 backend 請求發生在 `AccessChecker.prepare(request)`：`FhirProxyController` 在 `checkAccess` 前 `await` 它，內建的 `list` checker 以 `CachedFhirClient` 預載同步判斷所需的全部查詢結果；預載後仍查不到的查詢一律走拒絕路徑。單元測試可直接注入同步 mock client（參考 `tests/helpers/mock-http-fhir-client.ts`）。
+
+預載時同時對外發出的查詢有上限（每次 8 筆），避免單一 transaction bundle 帶入數百個 patient 就驅動同等數量的並行 backend 請求。
+
+`ACCESS_CHECKER=list` 之外，若自訂 checker 也要在授權階段查 backend，`createApp` 預設不會為它建立 `FhirBackendService`；請在建構時自行注入 `fhirBackend`。
+
+**GCP 部署的 backend 憑證**
+
+`BACKEND_TYPE=GCP` 時，轉發請求、list mode 的 FHIR List membership 查詢、以及把新建成 Patient 加回 access List 的 PATCH，都使用同一組 ADC（Application Default Credentials）access token。token 會過期，因此每次請求前重新解析。
 
 **SMART Scope**
 

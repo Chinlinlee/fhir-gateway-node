@@ -1,7 +1,7 @@
 import { createServer, type Server } from "node:http";
 
 import { type CryptoKey, SignJWT } from "jose";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
@@ -22,6 +22,8 @@ type UpstreamServer = {
     baseUrl: string;
     /** List PATCH 的 request body；postProcess 新建 Patient 後應送出一次。 */
     listPatches: string[];
+    /** 讓 access List 的 PATCH 回指定狀態碼，用來模擬寫入失敗；null 表示正常回 200。 */
+    setListPatchStatus: (status: number | null) => void;
     close: () => Promise<void>;
 };
 
@@ -54,6 +56,7 @@ async function signJwtWithClaims(
 /** stub FHIR upstream：提供 patient List allow-list、Patient 資源與 List 寫入。 */
 async function startUpstreamServer(): Promise<UpstreamServer> {
     const listPatches: string[] = [];
+    let listPatchStatus: number | null = null;
     const server: Server = createServer((req, res) => {
         const url = new URL(req.url ?? "/", "http://127.0.0.1");
 
@@ -107,6 +110,11 @@ async function startUpstreamServer(): Promise<UpstreamServer> {
             });
             req.on("end", () => {
                 listPatches.push(body);
+                if (listPatchStatus !== null) {
+                    res.writeHead(listPatchStatus, { "content-type": "application/fhir+json" });
+                    res.end(JSON.stringify({ resourceType: "OperationOutcome" }));
+                    return;
+                }
                 res.writeHead(200, { "content-type": "application/fhir+json" });
                 res.end(JSON.stringify({ resourceType: "List", id: PATIENT_LIST_ID }));
             });
@@ -127,6 +135,9 @@ async function startUpstreamServer(): Promise<UpstreamServer> {
 
     return {
         listPatches,
+        setListPatchStatus: (status: number | null) => {
+            listPatchStatus = status;
+        },
         baseUrl: `http://127.0.0.1:${address.port}/fhir`,
         close: () =>
             new Promise<void>((resolve, reject) => {
@@ -217,6 +228,32 @@ describe("ACCESS_CHECKER=list over the app seam", () => {
         expect(response.status).toBe(201);
         expect(upstream.listPatches.length).toBe(1);
         expect(upstream.listPatches[0]).toContain(`Patient/${PATIENT_CREATED}`);
+    });
+
+    it("returns the upstream response and logs when the access List update fails", async () => {
+        const app = createListModeApp();
+        const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
+            [LAUNCH_CLAIM_NAMES.patientList]: PATIENT_LIST_ID,
+            scope: "patient/Patient.write",
+        });
+        upstream.setListPatchStatus(500);
+        const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+        const response = await app.handle(
+            new Request(`http://localhost${FHIR_API_PREFIX}/Patient`, {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${jwt}`,
+                    "content-type": "application/fhir+json",
+                },
+                body: JSON.stringify({ resourceType: "Patient" }),
+            }),
+        );
+
+        // 上游的 Patient 已經建立成功，改成錯誤只會誘導 client 重試而製造重複資源；
+        // 但授權狀態已與回應不一致，因此必須留下可稽核的紀錄。
+        expect(response.status).toBe(201);
+        expect(logged).toHaveBeenCalledWith(expect.stringContaining("postProcess failed for POST Patient"));
     });
 
     it("returns 401 naming the missing patient-list field when the token carries none", async () => {

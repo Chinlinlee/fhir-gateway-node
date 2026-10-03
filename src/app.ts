@@ -39,26 +39,36 @@ export const createApp = (options?: CreateAppOptions) => {
     }
 
     if (options?.tokenVerifier && options.config) {
-        const fhirBackend = options.fhirBackend ?? new FhirBackendService({ baseUrl: options.config.proxyTo });
+        const config = options.config;
+        // FhirBackendService 只在真的有人要用時才建立：AuditEventService 與 list checker。
+        const fhirBackend =
+            options.fhirBackend ??
+            (options.auditEventService === undefined || config.accessChecker === "list"
+                ? new FhirBackendService({
+                      baseUrl: config.proxyTo,
+                      ...(gcpTokenProvider ? { getBearerToken: () => gcpTokenProvider.getAccessToken() } : {}),
+                  })
+                : undefined);
         app.use(
             fhirRoute({
-                config: options.config,
+                config,
                 tokenVerifier: options.tokenVerifier,
                 launchContextProvider: options.launchContextProvider ?? defaultLaunchContextProvider,
-                fhirBackend,
+                ...(fhirBackend ? { fhirBackend } : {}),
                 allowedQueries:
                     options.allowedQueries ??
-                    AllowedQueriesCheckerService.loadFromFile(options.config.allowedQueriesFile),
+                    AllowedQueriesCheckerService.loadFromFile(config.allowedQueriesFile),
                 accessCheckerRegistry: options.accessCheckerRegistry ?? createDefaultAccessCheckerRegistry(),
                 patientFinder: options.patientFinder ?? PatientFinderService.getInstance(),
                 httpFhirClient:
                     options.httpFhirClient ??
                     new HttpFhirClientService({
-                        proxyTo: options.config.proxyTo,
-                        backendType: options.config.backendType,
-                        ...(gcpTokenProvider ? { getGcpAccessToken: () => gcpTokenProvider.getAccessToken() } : {}),
+                        proxyTo: config.proxyTo,
+                        backendType: config.backendType,
                     }),
-                auditEventService: options.auditEventService ?? new AuditEventService(fhirBackend),
+                ...(options.auditEventService || !fhirBackend
+                    ? {}
+                    : { auditEventService: new AuditEventService(fhirBackend) }),
             }),
         );
     }

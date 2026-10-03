@@ -17,6 +17,7 @@ import type { LaunchContext, LaunchContextProvider } from "../types/launch-conte
 import type { VerifiedJwt } from "../types/verified-jwt";
 import { applyGzipResponseHeaders, decodeCompressedBody } from "../utils/compression.util";
 import { parseResourcePath } from "../utils/fhir.util";
+import { formatErrorMessage } from "../utils/format-error.util";
 import { getPrimaryPatientSearchParam } from "../utils/patient-params.util";
 import { applyRequestMutation } from "../utils/request-mutation.util";
 
@@ -177,7 +178,13 @@ async function postProcessResponseBody(
         if (typeof postProcessed === "string") {
             return postProcessed;
         }
-    } catch {
+    } catch (error) {
+        // postProcess 失敗（例如把新建立的 Patient 加回 access List 的 PATCH 失敗）不回頭改寫回應：
+        // 上游的寫入已經發生並回 2xx，改成錯誤會誘導 client 重試而製造重複資源。
+        // 但授權狀態已與回應不一致，必須留下足以稽核的紀錄。
+        console.error(
+            `[fhir-proxy] postProcess failed for ${requestDetails.requestType} ${requestPath}: ${formatErrorMessage(error)}; the upstream response is returned unchanged but authorization state may have diverged`,
+        );
         return body;
     }
     return body;
