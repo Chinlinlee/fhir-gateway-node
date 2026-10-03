@@ -106,7 +106,7 @@ Access Checker 是 gateway 在 JWT 驗證通過、且 Allowed Queries 未放行�
 | --- | --- |
 | `AccessChecker` | 每個請求建立一個實例；實作 `checkAccess(request)` |
 | `AccessCheckerFactory` | thread-safe；從 LaunchContext 等 context 建立 `AccessChecker` |
-| `AccessCheckerCreateContext` | Factory 可用依賴：`launch`、`patientFinder`、（選用）`httpFhirClient` |
+| `AccessCheckerCreateContext` | Factory 可用依賴：`launch`、`patientFinder`、（選用）`fhirBackend` |
 | `FhirRequestDetails` | 請求摘要：`requestPath`、`requestType`、`queryParams`、`requestBody?` |
 | `AccessDecision` | 授權結果；可選附帶 mutation / postProcess / audit user |
 | `LaunchContext` | verified token 轉譯出的 IdP 中立 DTO：`subject`、`patientId?`、`patientListId?`、`scopes`、`agent` |
@@ -216,9 +216,9 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 );
 ```
 
-**HttpFhirClient**（需主動傳入 context）
+**fhirBackend**（非同步，供 checker 在授權前查詢 backend）
 
-若 checker 需在授權階段查詢 backend（如 `list` checker 驗證 List membership），Factory 需 `httpFhirClient`。目前 `FhirProxyController` 尚未將其注入 `create()` context；自訂整合時請在 controller 或 route deps 中補上。單元測試可直接注入 mock client（參考 `tests/helpers/mock-http-fhir-client.ts`）。
+若 checker 需在授權階段查詢 backend（如 `list` checker 驗證 FHIR List membership），Factory 可取用 context 的 `fhirBackend`。`checkAccess` 是同步契約，因此實際的 backend 請求發生在 `AccessChecker.prepare(request)`：`FhirProxyController` 在 `checkAccess` 前 `await` 它，內建的 `list` checker 以 `CachedFhirClient` 預載同步判斷所需的全部查詢結果；預載後仍查不到的查詢一律走拒絕路徑。單元測試可直接注入同步 mock client（參考 `tests/helpers/mock-http-fhir-client.ts`）。
 
 **SMART Scope**
 

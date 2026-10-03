@@ -18,7 +18,7 @@ export function accessGrantedAndUpdateList(options: AccessGrantedAndUpdateListOp
     return {
         canAccess: () => true,
         getRequestMutation: () => null,
-        postProcess: (_request, response) => {
+        postProcess: async (_request, response) => {
             if (response.status < 200 || response.status >= 300) {
                 return response.body;
             }
@@ -42,7 +42,7 @@ export function accessGrantedAndUpdateList(options: AccessGrantedAndUpdateListOp
             if (isSameResourceType(resource.resourceType, "Patient")) {
                 const patientId = resource.id;
                 if (patientId) {
-                    addPatientToList(patientListId, patientId, httpFhirClient);
+                    await addPatientToList(patientListId, patientId, httpFhirClient);
                 }
                 return response.body;
             }
@@ -62,7 +62,7 @@ export function accessGrantedAndUpdateList(options: AccessGrantedAndUpdateListOp
 
             for (const patientId of patientIdsInResponse) {
                 if (!existPutPatients.has(patientId)) {
-                    addPatientToList(patientListId, patientId, httpFhirClient);
+                    await addPatientToList(patientListId, patientId, httpFhirClient);
                 }
             }
 
@@ -102,7 +102,11 @@ function parsePatientIdFromLocation(location: string): string | null {
     return match?.[1] ?? null;
 }
 
-function addPatientToList(patientListId: string, newPatientId: string, httpFhirClient: HttpFhirClientLike): void {
+function addPatientToList(
+    patientListId: string,
+    newPatientId: string,
+    httpFhirClient: HttpFhirClientLike,
+): void | Promise<void> {
     const jsonPatch = JSON.stringify([
         {
             op: "add",
@@ -114,7 +118,7 @@ function addPatientToList(patientListId: string, newPatientId: string, httpFhirC
             },
         },
     ]);
-    httpFhirClient.patchResource(`List/${encodeURIComponent(patientListId)}`, jsonPatch);
+    return httpFhirClient.patchResource(`List/${encodeURIComponent(patientListId)}`, jsonPatch);
 }
 
 export function buildListSearchPath(patientListId: string, itemsParam: string): string {
