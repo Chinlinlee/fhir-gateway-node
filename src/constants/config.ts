@@ -12,8 +12,6 @@ export const ENV_KEYS = {
     ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "ALLOW_TOKEN_ISSUER_HOST_MISMATCH",
     /** 驗簽金鑰來源：jwks | keycloak-public-key | auto */
     SIGNING_KEY_SOURCE: "SIGNING_KEY_SOURCE",
-    /** Launch context 的 claim 名稱設定（JSON：邏輯欄位名 → claim 名稱） */
-    CLAIM_NAMES: "TOKEN_CLAIM_NAMES",
 } as const;
 
 export const DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH = false;

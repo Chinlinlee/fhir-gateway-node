@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { type App, createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
-import { DEFAULT_CLAIM_NAMES } from "../src/constants/claim-names";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
+import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
@@ -98,7 +98,7 @@ describe("Scope resolution over the app seam", () => {
     /** 以 `scope` 空白分隔字串交付 SMART scopes。 */
     function tokenWithScopeString(scopes: string): Promise<string> {
         return signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [DEFAULT_CLAIM_NAMES.patient]: PATIENT_ID,
+            [PATIENT_CLAIM]: PATIENT_ID,
             scope: scopes,
         });
     }
@@ -106,7 +106,7 @@ describe("Scope resolution over the app seam", () => {
     /** 以 RFC 9068 `scp` 陣列交付 SMART scopes。 */
     function tokenWithScpArray(scopes: string[]): Promise<string> {
         return signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [DEFAULT_CLAIM_NAMES.patient]: PATIENT_ID,
+            [PATIENT_CLAIM]: PATIENT_ID,
             scp: scopes,
         });
     }
@@ -180,7 +180,7 @@ describe("Scope resolution over the app seam", () => {
 
     it("governs by scp when both forms are present and scp is narrower", async () => {
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [DEFAULT_CLAIM_NAMES.patient]: PATIENT_ID,
+            [PATIENT_CLAIM]: PATIENT_ID,
             scope: "patient/*.*",
             scp: ["patient/Patient.read"],
         });

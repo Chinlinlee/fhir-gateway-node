@@ -10,6 +10,7 @@ import type { FhirBundleEntry } from "../../types/fhir-bundle";
 import type { FhirRequestDetails } from "../../types/fhir-request";
 import { getResourceIdOrNull, isSameResourceType, parseResourcePath } from "../../utils/fhir.util";
 import { getLaunchIdOrFail } from "../../utils/launch-context.util";
+import { LAUNCH_CLAIM_NAMES } from "../launch-context.service";
 import {
     type SmartFhirScope,
     SmartScopeChecker,
@@ -17,6 +18,13 @@ import {
     SmartScopePrincipal,
 } from "../smart-scope.service";
 import { deniedAccessDecision, grantedAccessDecision, parseRequestBundle } from "./list-access-checker.util";
+
+/**
+ * Launch context 對應的 claim 名稱；唯一來源為 `LAUNCH_CLAIM_NAMES`（設定化見 issue #8）。
+ * Claim names for the launch context; `LAUNCH_CLAIM_NAMES` is the single source of truth.
+ */
+export const PATIENT_CLAIM = LAUNCH_CLAIM_NAMES.patient;
+export const SCOPES_CLAIM = LAUNCH_CLAIM_NAMES.scopes;
 
 export class PatientAccessCheckerService implements AccessChecker {
     private readonly authorizedPatientId: string | null;

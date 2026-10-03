@@ -3,7 +3,6 @@ import { gzip } from "node:zlib";
 
 import type { GatewayConfig } from "../configs/env.schema";
 import { AuthenticationError } from "../errors/authentication.error";
-import { ClaimConfigurationError } from "../errors/claim-configuration.error";
 import { InvalidRequestError } from "../errors/invalid-request.error";
 import type { AccessCheckerRegistryService } from "../services/access-checker-registry.service";
 import type { AllowedQueriesCheckerService } from "../services/allowed-queries.service";
@@ -62,11 +61,7 @@ function normalizeRequestPath(relativePath: string): string {
     return relativePath.replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
-function createOperationOutcome(
-    status: number,
-    code: "forbidden" | "login" | "exception",
-    diagnostics: string,
-): Response {
+function createOperationOutcome(status: number, code: "forbidden" | "login", diagnostics: string): Response {
     return Response.json(
         {
             resourceType: "OperationOutcome",
@@ -237,16 +232,7 @@ export abstract class FhirProxyController {
                     return createOperationOutcome(401, "login", diagnostics);
                 }
 
-                try {
-                    launch = deps.launchContextProvider.create(verifiedJwt);
-                } catch (error) {
-                    if (error instanceof ClaimConfigurationError) {
-                        // 這是部署設定錯誤，不是授權拒絕：回 500 並指名設定，避免與 401 混淆。
-                        console.error(`[fhir-proxy] 500 ${method} ${requestPath}: ${error.message}`);
-                        return createOperationOutcome(500, "exception", error.message);
-                    }
-                    throw error;
-                }
+                launch = deps.launchContextProvider.create(verifiedJwt);
                 queryParams = maybeInjectPatientParam(deps.config, requestPath, method, queryParams, launch);
 
                 const authenticatedRequest = buildRequestDetails(requestPath, method, queryParams, requestBody);

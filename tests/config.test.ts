@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, it, expect } from "vitest";
 import { ConfigError, loadGatewayConfig, minimalValidEnv } from "../src/configs";
 
 describe("loadGatewayConfig", () => {
@@ -115,50 +115,6 @@ describe("loadGatewayConfig", () => {
     it("throws on invalid SIGNING_KEY_SOURCE", () => {
         expect(() => loadGatewayConfig(minimalValidEnv({ SIGNING_KEY_SOURCE: "keycloak" }))).toThrow(
             /SIGNING_KEY_SOURCE/,
-        );
-    });
-
-    it("leaves claim names unconfigured when TOKEN_CLAIM_NAMES is absent or empty", () => {
-        expect(loadGatewayConfig(minimalValidEnv()).claimNames).toBeUndefined();
-        expect(loadGatewayConfig(minimalValidEnv({ TOKEN_CLAIM_NAMES: "" })).claimNames).toBeUndefined();
-        expect(loadGatewayConfig(minimalValidEnv({ TOKEN_CLAIM_NAMES: "{}" })).claimNames).toBeUndefined();
-    });
-
-    it("parses TOKEN_CLAIM_NAMES as a logical field to claim name map", () => {
-        const config = loadGatewayConfig(
-            minimalValidEnv({ TOKEN_CLAIM_NAMES: '{"patient":"fhir_patient","patientList":"fhir_list"}' }),
-        );
-
-        expect(config.claimNames).toEqual({ patient: "fhir_patient", patientList: "fhir_list" });
-    });
-
-    it("fails at startup naming TOKEN_CLAIM_NAMES when it is not valid JSON", () => {
-        expect(() => loadGatewayConfig(minimalValidEnv({ TOKEN_CLAIM_NAMES: "{patient=x}" }))).toThrow(
-            /TOKEN_CLAIM_NAMES.*valid JSON/,
-        );
-    });
-
-    it("fails at startup naming TOKEN_CLAIM_NAMES when it is not an object", () => {
-        expect(() => loadGatewayConfig(minimalValidEnv({ TOKEN_CLAIM_NAMES: '["patient"]' }))).toThrow(
-            /TOKEN_CLAIM_NAMES.*JSON object/,
-        );
-    });
-
-    it("fails at startup naming the unknown logical field in TOKEN_CLAIM_NAMES", () => {
-        expect(() => loadGatewayConfig(minimalValidEnv({ TOKEN_CLAIM_NAMES: '{"patients":"p"}' }))).toThrow(
-            /TOKEN_CLAIM_NAMES.*unknown logical field 'patients'/,
-        );
-    });
-
-    it("fails at startup naming TOKEN_CLAIM_NAMES when a claim name is empty", () => {
-        expect(() => loadGatewayConfig(minimalValidEnv({ TOKEN_CLAIM_NAMES: '{"patient":"  "}' }))).toThrow(
-            /TOKEN_CLAIM_NAMES\.patient.*non-empty/,
-        );
-    });
-
-    it("fails at startup when TOKEN_CLAIM_NAMES overrides a structural claim", () => {
-        expect(() => loadGatewayConfig(minimalValidEnv({ TOKEN_CLAIM_NAMES: '{"patient":"sub"}' }))).toThrow(
-            /TOKEN_CLAIM_NAMES\.patient.*structural claim/,
         );
     });
 });

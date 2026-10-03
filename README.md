@@ -39,38 +39,14 @@ gateway 啟動時只抓一次 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 的 OIDC di
 
 三個策略都不接受時回 401。策略只透過 `IssuerPolicy` 介面使用，其他呼叫端無法繞過 policy 單獨套用。
 
-### Claim 名稱設定（`TOKEN_CLAIM_NAMES`）
-
-「token 的哪個 claim 帶著 patient / patient-list / scopes」由單一選填 JSON 設定決定，換 IdP 因此是設定變更，不需要改授權程式碼。設定格式為「邏輯欄位名 → claim 名稱」的 JSON 物件：
-
-```bash
-TOKEN_CLAIM_NAMES={"patient":"fhir_patient","patientList":"fhir_list"}
-```
-
-| 邏輯欄位 | 預設 claim 名稱 | 用途 |
-| --- | --- | --- |
-| `patient` | `patient` | 授權的 patient id（patient 模式） |
-| `patientList` | `patient_list` | patient-list id（list 模式） |
-| `scopesSpaceDelimited` | `scope` | 空白分隔的 SMART scopes |
-| `scopesArray` | `scp` | RFC 9068 陣列形式的 SMART scopes |
-| `authorizedParty` | `azp` | AuditEvent 的 authorized party |
-| `tokenId` | `jti` | AuditEvent 的 token id |
-| `subjectName` | `subject_name` | 顯示名稱（優先於 `name`） |
-| `name` | `name` | 顯示名稱（次選） |
-
-- **未設定或空物件時沿用上表預設名稱**，行為與設定前完全一致；既有 Keycloak 部署不需要任何變更。
-- `iss` 與 `sub` 是 gateway 自身的**結構性 claim**（issuer policy 比對與 OIDC 主體），不接受覆寫；設定成這兩個名稱會讓啟動直接失敗。
-- 啟動時會驗證設定本身：JSON 格式、未知邏輯欄位、空 claim 名稱、結構性 claim 覆寫，任一不合法都讓啟動失敗並在訊息中指名 `TOKEN_CLAIM_NAMES`。
-- **設定了 claim 名稱、但 token 完全沒有任何一個這些名稱時，gateway 回 500**（附帶指名 `TOKEN_CLAIM_NAMES` 的訊息），而不是 401。這是部署設定錯誤，不是授權拒絕，因此刻意與 401 區分開，避免與真正的授權拒絕混在一起。只缺其中一個（例如 patient-mode token 沒有 patient claim）仍維持原本的 401。
-
 ## SMART Scopes 的兩種交付形式（ScopeResolver）
 
 IdP 交付 SMART scopes 有兩種標準化形式，gateway 兩種都接受，由單一 `ScopeResolver` 正規化後交給 access checker：
 
 | 形式 | claim | 說明 |
 | --- | --- | --- |
-| 空白分隔字串 | `scope`（`TOKEN_CLAIM_NAMES` 的 `scopesSpaceDelimited`） | OAuth 2.0 標準形式，也是現行 Keycloak 部署的行為 |
-| 字串陣列 | `scp`（`TOKEN_CLAIM_NAMES` 的 `scopesArray`） | RFC 9068 標準形式，多數其他 IdP 預設採用 |
+| 空白分隔字串 | `scope` | OAuth 2.0 標準形式，也是現行 Keycloak 部署的行為 |
+| 字串陣列 | `scp` | RFC 9068 標準形式，多數其他 IdP 預設採用 |
 
 - **兩者並存時以 `scp` 為準**：`scp` 是 RFC 9068 的標準形式，IdP 同時發出兩者等同於刻意宣告採用新形式。
 - **兩種形式的每一個 entry 都走同一套 SMART v2 文法驗證**（`src/services/smart-scope.service.ts`），接受陣列形式**不會**放寬可接受的 scope 字串集合；不符合文法的 entry 一律略過。
@@ -221,7 +197,7 @@ const patientListId = context.launch.patientListId; // string | undefined
 const agent = context.launch.agent; // { authorizedParty?, issuer?, tokenId?, subject?, displayName? }
 ```
 
-Access checker **不得**直接讀 raw JWT claims，也不得出現 claim 名稱字面值；claim 名稱只存在於 `src/constants/claim-names.ts` 的 `DEFAULT_CLAIM_NAMES`，並可由 `TOKEN_CLAIM_NAMES` 覆寫（見 [Claim 名稱設定](#claim-名稱設定token_claim_names)）。自訂 checker 需要新的 token 欄位時，擴充 `LaunchContext` 與 provider，不要在 checker 裡加 `payload[claim]`。
+Access checker **不得**直接讀 raw JWT claims；claim 名稱只存在於 `LaunchContextProvider`（`src/services/launch-context.service.ts` 的 `LAUNCH_CLAIM_NAMES`）。自訂 checker 需要新的 token 欄位時，擴充 `LaunchContext` 與 provider，不要在 checker 裡加 `payload[claim]`。
 
 Launch context 欄位缺少或格式錯誤時拋 `AuthenticationError`（回 401），訊息會命名缺少的邏輯欄位；請求格式錯誤拋 `InvalidRequestError`（回 400）。
 
@@ -255,7 +231,6 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 | `AuthenticationError` | 401 | Launch context 欄位缺失、scope 不足、Factory 初始化失敗 |
 | `InvalidRequestError` | 400 | 請求 body / path 無法解析 |
 | `accessDenied()` | 403 | 授權邏輯判定拒絕（不拋例外） |
-| `ClaimConfigurationError` | 500 | `TOKEN_CLAIM_NAMES` 設定的 claim 名稱在 token 中一個都沒有（部署設定錯誤，非授權拒絕） |
 
 ### 內建 Checker 一覽
 
@@ -292,7 +267,6 @@ cp env.example .env
 
 - `RUN_MODE`：`PROD`（預設）或 `DEV`（容忍 JWT `iss` 與 `TOKEN_ISSUER` 不同）
 - `SIGNING_KEY_SOURCE`：驗簽金鑰來源（trust path）：`auto`（預設）、`jwks`、`keycloak-public-key`。見 [Identity Provider（驗簽金鑰來源）](#identity-provider驗簽金鑰來源)
-- `TOKEN_CLAIM_NAMES`：Launch context 的 claim 名稱設定（JSON 物件，邏輯欄位名 → claim 名稱）。留空時沿用現行名稱，行為與設定前一致。見 [Claim 名稱設定](#claim-名稱設定token_claim_names)
 - `ALLOW_TOKEN_ISSUER_HOST_MISMATCH`：**Keycloak 專屬**。`true` 時，PROD 下允許 JWT `iss` 的 host 與 `TOKEN_ISSUER` 不同、但 realm path 相同（預設 `false`）
 - `PORT`：HTTP listen port（預設 `3000`）
 - `WELL_KNOWN_ENDPOINT`：預設 `.well-known/openid-configuration`
