@@ -128,6 +128,43 @@ describe("AuditEventService", () => {
         expect(auditEvent.agent?.[0]?.who?.display).toBe("Dr. Smith");
         expect(auditEvent.source?.observer?.display).toBe("http://gateway/fhir");
         expect(auditEvent.entity?.[0]?.what?.reference).toBe("Patient/123/_history/1");
+        // launch agent 的 sub / azp / jti 必須整組落到 OAuth token extensions 上
+        expect(auditEvent.agent?.[0]?.extension).toEqual([
+            { url: "urn:ietf:params:oauth:token-sub", valueString: "user-1" },
+            { url: "urn:ietf:params:oauth:token-azp", valueString: "test-app" },
+            { url: "urn:ietf:params:oauth:token-jti", valueString: "jwt-id" },
+        ]);
+    });
+
+    it("omits the OAuth token extensions when the launch agent carries no sub, azp or jti", async () => {
+        const posts: PostCall[] = [];
+        const service = new AuditEventService({
+            postResource: async (resource) => {
+                posts.push({ resource });
+                return resource;
+            },
+        });
+
+        await service.log({
+            request: {
+                requestPath: "Patient/123",
+                requestType: "GET",
+                queryParams: {},
+            },
+            responseStatus: 200,
+            responseBody: JSON.stringify({ resourceType: "Patient", id: "123" }),
+            responseHeaders: new Headers(),
+            userWho: {
+                resourceType: "Practitioner",
+                display: "Dr. Smith",
+            },
+            agent: {},
+            gatewayBaseUrl: "http://gateway/fhir",
+            configuredActions: ["R"],
+        });
+
+        const auditEvent = posts[0]?.resource as fhir4.AuditEvent;
+        expect(auditEvent.agent?.[0]?.extension).toBeUndefined();
     });
 
     it("omits entity when request path has no resource id", async () => {

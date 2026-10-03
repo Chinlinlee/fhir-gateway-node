@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { AuthenticationError } from "../src/errors/authentication.error";
 import { InvalidRequestError } from "../src/errors/invalid-request.error";
 import { ListAccessCheckerService } from "../src/services/access-checkers/list-access-checker.service";
 import {
@@ -7,15 +8,16 @@ import {
     buildPatientExistenceSearchPath,
 } from "../src/services/access-checkers/list-access-checker.util";
 import { PatientFinderService } from "../src/services/patient-finder.service";
+import type { HttpFhirClientLike } from "../src/types/http-fhir-client";
 import {
     PATIENT_AUTHORIZED,
     PATIENT_IN_BUNDLE_1,
     PATIENT_IN_BUNDLE_2,
     PATIENT_NON_AUTHORIZED,
-    TEST_LIST_ID,
     readAccessCheckerBundleFromPatientFinder,
     readAccessCheckerFixture,
     readAccessCheckerJson,
+    TEST_LIST_ID,
 } from "./helpers/access-checker-fixture";
 import { buildFhirRequest } from "./helpers/fhir-request";
 import { MockHttpFhirClient } from "./helpers/mock-http-fhir-client";
@@ -407,5 +409,28 @@ describe("ListAccessCheckerService", () => {
                 .checkAccess(buildFhirRequest("Observation", { subject: [PATIENT_NON_AUTHORIZED] }, "DELETE"))
                 .canAccess(),
         ).toBe(false);
+    });
+});
+
+describe("ListAccessCheckerService.prepare", () => {
+    it("refuses with 401-mapped error when the patient-list membership never converges", async () => {
+        let rounds = 0;
+        const nonConverging: HttpFhirClientLike = {
+            getResource: () => ({ resourceType: "Bundle", type: "searchset", total: 0, entry: [] }),
+            patchResource: () => undefined,
+            warm: async (load) => {
+                load();
+                rounds += 1;
+                return true;
+            },
+        };
+        const checker = new ListAccessCheckerService(nonConverging, TEST_LIST_ID, PatientFinderService.getInstance());
+
+        // 迭代不收斂代表 membership 無法判定，必須拒絕而不是放行
+        await expect(checker.prepare(buildFhirRequest(`Patient/${PATIENT_AUTHORIZED}`))).rejects.toThrow(
+            AuthenticationError,
+        );
+        // 放棄前跑滿 MAX_PREPARE_ROUNDS（8）而不是無限迴圈
+        expect(rounds).toBe(8);
     });
 });

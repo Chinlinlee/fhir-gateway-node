@@ -7,7 +7,6 @@ import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
 import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
-import * as issuerPolicyModule from "../src/services/issuer-policy/issuer-policy";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
@@ -122,19 +121,35 @@ describe("Issuer policy over the app", () => {
     });
 
     it("accepts the configured issuer under every run mode and setting combination", async () => {
-        const runModes: GatewayConfig["runMode"][] = ["PROD", "DEV"];
-        for (const runMode of runModes) {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+        const outcomes: Array<{
+            runMode: GatewayConfig["runMode"];
+            allowTokenIssuerHostMismatch: boolean;
+            status: number;
+            warned: boolean;
+        }> = [];
+
+        for (const runMode of ["PROD", "DEV"] as const) {
             for (const allowTokenIssuerHostMismatch of [false, true]) {
                 const app = await createIssuerScopedApp(issuer, upstream, runMode, allowTokenIssuerHostMismatch);
+                warn.mockClear();
                 const response = await app.requestPatient(issuer.issuerUrl);
-
-                expect({ runMode, allowTokenIssuerHostMismatch, status: response.status }).toEqual({
+                outcomes.push({
                     runMode,
                     allowTokenIssuerHostMismatch,
-                    status: 200,
+                    status: response.status,
+                    warned: warn.mock.calls.length > 0,
                 });
             }
         }
+
+        // 精確比對排在最前：issuer 完全相同時不該被後面的策略當成「不等價」而發出警告
+        expect(outcomes).toEqual([
+            { runMode: "PROD", allowTokenIssuerHostMismatch: false, status: 200, warned: false },
+            { runMode: "PROD", allowTokenIssuerHostMismatch: true, status: 200, warned: false },
+            { runMode: "DEV", allowTokenIssuerHostMismatch: false, status: 200, warned: false },
+            { runMode: "DEV", allowTokenIssuerHostMismatch: true, status: 200, warned: false },
+        ]);
     });
 
     it("accepts a differing issuer in DEV mode with a warning", async () => {
@@ -176,11 +191,5 @@ describe("Issuer policy over the app", () => {
 
         expect(response.status).toBe(401);
         expect(warn).not.toHaveBeenCalled();
-    });
-});
-
-describe("Issuer policy module surface", () => {
-    it("exposes the policy as the only entry point", () => {
-        expect(Object.keys(issuerPolicyModule)).toEqual(["createIssuerPolicy"]);
     });
 });

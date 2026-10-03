@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { defaultUserWhoFromLaunch } from "../src/types/access-decision";
 
 describe("defaultUserWhoFromLaunch", () => {
-    it("prefers subject_name over name for display", () => {
+    it("carries the launch agent display name through to the audit user", () => {
         const who = defaultUserWhoFromLaunch({
             subject: "user-123",
             issuer: "https://issuer.example",
