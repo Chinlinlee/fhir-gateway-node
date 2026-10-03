@@ -125,8 +125,9 @@ export class OidcJwksSigningKeyResolver implements SigningKeyResolver {
         if (this.refreshedKids.has(kid)) {
             return;
         }
-        this.refreshedKids.add(kid);
 
+        // 先等同一個 kid 進行中的重新抓取；不能在等待前就記成「抓過」，
+        // 否則同時抵達的請求會直接略過重新抓取，拿著舊快照回 401。
         let inFlight = this.refreshesInFlight.get(kid);
         if (!inFlight) {
             inFlight = this.refreshKeySet().finally(() => {
@@ -135,6 +136,7 @@ export class OidcJwksSigningKeyResolver implements SigningKeyResolver {
             this.refreshesInFlight.set(kid, inFlight);
         }
         await inFlight;
+        this.refreshedKids.add(kid);
     }
 
     /**

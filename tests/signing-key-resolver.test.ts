@@ -345,6 +345,21 @@ describe("signing key rotation", () => {
         expect(issuer.requests.jwks).toBe(2);
     });
 
+    it("jwks — authorizes concurrent tokens carrying the same rotated kid", async () => {
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "jwks");
+
+        const rotated = await issuer.rotateSigningKey();
+        const jwt = await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid);
+
+        // 同時抵達的請求必須共用同一個重新抓取，不能各自拿著舊快照回 401
+        const responses = await Promise.all([readPatient(app, jwt), readPatient(app, jwt), readPatient(app, jwt)]);
+
+        expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+        expect(issuer.requests.jwks).toBe(2);
+    });
+
     it("jwks — rejects a token naming a kid the IdP never publishes", async () => {
         const issuer = await startIssuer({ servePublicKey: false, serveJwks: true });
         const upstream = await startUpstream();
