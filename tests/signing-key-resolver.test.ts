@@ -305,3 +305,100 @@ describe("SIGNING_KEY_SOURCE trust paths", () => {
         expect(issuer.requests.jwks).toBe(0);
     });
 });
+
+describe("signing key rotation", () => {
+    const closers: Array<() => Promise<void>> = [];
+
+    async function startIssuer(options: IssuerTestServerOptions): Promise<IssuerTestServer> {
+        const issuer = await startIssuerTestServer("test", options);
+        closers.push(() => issuer.close());
+        return issuer;
+    }
+
+    async function startUpstream(): Promise<UpstreamServer> {
+        const upstream = await startUpstreamServer();
+        closers.push(() => upstream.close());
+        return upstream;
+    }
+
+    afterEach(async () => {
+        vi.restoreAllMocks();
+        await Promise.all(closers.splice(0).map((close) => close()));
+    });
+
+    it("jwks — authorizes a token signed by a key the IdP published only after startup", async () => {
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "jwks");
+
+        const before = await readPatient(
+            app,
+            await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey, TEST_JWK_KID),
+        );
+        expect(before.status).toBe(200);
+
+        // IdP 輪替簽章金鑰；同一個 app instance（未重新啟動）必須認得新 kid
+        const rotated = await issuer.rotateSigningKey();
+        const after = await readPatient(app, await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid));
+
+        expect(after.status).toBe(200);
+        expect(issuer.requests.jwks).toBe(2);
+    });
+
+    it("jwks — rejects a token naming a kid the IdP never publishes", async () => {
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "jwks");
+
+        const response = await readPatient(
+            app,
+            await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey, "kid-the-idp-never-had"),
+        );
+
+        expect(response.status).toBe(401);
+    });
+
+    it("jwks — re-fetches the JWKS at most once per unrecognised kid", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "jwks");
+        const jwt = await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey, "unknown-kid");
+
+        const first = await readPatient(app, jwt);
+        const jwksAfterFirst = issuer.requests.jwks;
+        const second = await readPatient(app, jwt);
+
+        expect(first.status).toBe(401);
+        expect(second.status).toBe(401);
+        // 啟動 1 次 + 第一次遇到未知 kid 重新抓 1 次；同一個 kid 不再重複抓
+        expect(jwksAfterFirst).toBe(2);
+        expect(issuer.requests.jwks).toBe(2);
+    });
+
+    it("jwks — returns 401 when the IdP is unreachable during a key refresh", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "jwks");
+        issuer.setJwksAvailability("unreachable");
+
+        const rotated = await issuer.rotateSigningKey();
+        const response = await readPatient(app, await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid));
+
+        expect(response.status).toBe(401);
+    });
+
+    it("keycloak-public-key — does not pick up a rotated key", async () => {
+        const issuer = await startIssuer({ serveJwks: false, publishJwksUri: false });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "keycloak-public-key");
+
+        const rotated = await issuer.rotateSigningKey();
+        const response = await readPatient(app, await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid));
+
+        expect(response.status).toBe(401);
+        // legacy adapter 的金鑰在啟動時載入一次，不會因為輪替而重新抓
+        expect(issuer.requests.root).toBe(1);
+    });
+});
