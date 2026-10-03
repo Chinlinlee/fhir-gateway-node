@@ -1,9 +1,8 @@
 /// <reference types="fhir" />
 
-import type { JWTPayload } from "jose";
-
 import type { AuditUserWho } from "../types/access-decision";
 import type { FhirRequestDetails } from "../types/fhir-request";
+import type { LaunchAgent } from "../types/launch-context";
 import { isValidFhirId, isValidFhirResourceType } from "../utils/fhir.util";
 
 type AuditEventBackend = {
@@ -16,7 +15,7 @@ export type AuditEventInput = {
     responseBody: string;
     responseHeaders: Headers;
     userWho: AuditUserWho;
-    jwtPayload: JWTPayload;
+    agent: LaunchAgent;
     gatewayBaseUrl: string;
     configuredActions: ReadonlyArray<string>;
 };
@@ -209,11 +208,6 @@ function toAuditOutcome(status: number): "0" | "8" {
     return status >= 400 ? "8" : "0";
 }
 
-function claimAsString(payload: JWTPayload, claim: string): string | undefined {
-    const value = payload[claim];
-    return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
 export class AuditEventService {
     private readonly backend: AuditEventBackend;
 
@@ -237,9 +231,9 @@ export class AuditEventService {
         const entityQuery = isSearch ? buildEntityQuery(input.request.queryParams) : null;
         const auditEntity = buildAuditEntity(isSearch, isDeleteAction, entityQuery, resourceReference);
 
-        const azp = claimAsString(input.jwtPayload, "azp");
-        const jti = claimAsString(input.jwtPayload, "jti");
-        const sub = claimAsString(input.jwtPayload, "sub");
+        const azp = input.agent.authorizedParty;
+        const jti = input.agent.tokenId;
+        const sub = input.agent.subject;
 
         const auditEvent: fhir4.AuditEvent = {
             resourceType: "AuditEvent",

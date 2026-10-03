@@ -5,16 +5,15 @@ import type { GatewayConfig } from "../configs/env.schema";
 import { AuthenticationError } from "../errors/authentication.error";
 import { InvalidRequestError } from "../errors/invalid-request.error";
 import type { AccessCheckerRegistryService } from "../services/access-checker-registry.service";
-import { PATIENT_CLAIM } from "../services/access-checkers/patient-access-checker.service";
 import type { AllowedQueriesCheckerService } from "../services/allowed-queries.service";
 import type { AuditEventService } from "../services/audit-event.service";
 import type { HttpFhirClientService } from "../services/http-fhir-client.service";
 import type { PatientFinderService } from "../services/patient-finder.service";
 import type { TokenVerifierService } from "../services/token-verifier.service";
-import { type AccessDecision, defaultUserWhoFromJwt } from "../types/access-decision";
+import { type AccessDecision, defaultUserWhoFromLaunch } from "../types/access-decision";
 import type { FhirRequestDetails, FhirRequestMethod } from "../types/fhir-request";
 import type { AsyncFhirClientLike } from "../types/http-fhir-client";
-import type { LaunchContextProvider } from "../types/launch-context";
+import type { LaunchContext, LaunchContextProvider } from "../types/launch-context";
 import type { VerifiedJwt } from "../types/verified-jwt";
 import { applyGzipResponseHeaders, decodeCompressedBody } from "../utils/compression.util";
 import { parseResourcePath } from "../utils/fhir.util";
@@ -117,14 +116,18 @@ function enrichCapabilityStatementSecurity(rawBody: string): string {
     return JSON.stringify(capability);
 }
 
+/**
+ * patient mode 的 read 未帶 patient 搜尋參數時，依 launch context 授權的 patient 補上。
+ * 注入與 access checker 共用同一個 `LaunchContext.patientId`，兩者不可能對授權的 patient 不一致。
+ */
 function maybeInjectPatientParam(
     config: GatewayConfig,
     requestPath: string,
     requestType: FhirRequestMethod,
     queryParams: Record<string, string[]>,
-    patientClaimValue: string | undefined,
+    launch: LaunchContext,
 ): Record<string, string[]> {
-    if (config.accessChecker !== "patient" || requestType !== "GET" || !patientClaimValue) {
+    if (config.accessChecker !== "patient" || requestType !== "GET" || !launch.patientId) {
         return queryParams;
     }
     const { resourceName } = parseResourcePath(requestPath);
@@ -137,7 +140,7 @@ function maybeInjectPatientParam(
     }
     return {
         ...queryParams,
-        [searchParam]: [`Patient/${patientClaimValue}`],
+        [searchParam]: [`Patient/${launch.patientId}`],
     };
 }
 
@@ -196,8 +199,7 @@ export abstract class FhirProxyController {
         let queryParams = parseQueryParams(url);
 
         let accessDecision: AccessDecision;
-        let verifiedJwtPatientClaim: string | undefined;
-        let verifiedJwtPayload: VerifiedJwt["payload"] | undefined;
+        let launch: LaunchContext | undefined;
 
         if (requestPath === "metadata") {
             accessDecision = {
@@ -230,17 +232,8 @@ export abstract class FhirProxyController {
                     return createOperationOutcome(401, "login", diagnostics);
                 }
 
-                const launch = deps.launchContextProvider.create(verifiedJwt);
-                const jwtPatientClaim = verifiedJwt.payload[PATIENT_CLAIM];
-                verifiedJwtPatientClaim = typeof jwtPatientClaim === "string" ? jwtPatientClaim : undefined;
-                verifiedJwtPayload = verifiedJwt.payload;
-                queryParams = maybeInjectPatientParam(
-                    deps.config,
-                    requestPath,
-                    method,
-                    queryParams,
-                    verifiedJwtPatientClaim,
-                );
+                launch = deps.launchContextProvider.create(verifiedJwt);
+                queryParams = maybeInjectPatientParam(deps.config, requestPath, method, queryParams, launch);
 
                 const authenticatedRequest = buildRequestDetails(requestPath, method, queryParams, requestBody);
                 const allowedQueriesDecision = deps.allowedQueries.checkAccess(authenticatedRequest);
@@ -310,9 +303,8 @@ export abstract class FhirProxyController {
         }
 
         const auditUserWho =
-            accessDecision.getUserWho?.(mutationRequest) ??
-            (verifiedJwtPayload ? defaultUserWhoFromJwt(verifiedJwtPayload) : null);
-        if (deps.auditEventService && deps.config.auditEventActions.length > 0 && auditUserWho && verifiedJwtPayload) {
+            accessDecision.getUserWho?.(mutationRequest) ?? (launch ? defaultUserWhoFromLaunch(launch.agent) : null);
+        if (deps.auditEventService && deps.config.auditEventActions.length > 0 && auditUserWho && launch) {
             try {
                 await deps.auditEventService.log({
                     request: mutationRequest,
@@ -320,7 +312,7 @@ export abstract class FhirProxyController {
                     responseBody,
                     responseHeaders,
                     userWho: auditUserWho,
-                    jwtPayload: verifiedJwtPayload,
+                    agent: launch.agent,
                     gatewayBaseUrl,
                     configuredActions: deps.config.auditEventActions,
                 });
