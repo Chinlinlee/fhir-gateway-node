@@ -445,9 +445,15 @@ describe("signing key rotation", () => {
         const jwt = await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid);
 
         // 同時抵達的請求必須共用同一個重新抓取，不能各自拿著舊快照回 401
-        const responses = await Promise.all([readPatient(app, jwt), readPatient(app, jwt), readPatient(app, jwt)]);
+        const responses = await Promise.all([
+            readPatient(app, jwt),
+            readPatient(app, jwt),
+            readPatient(app, jwt),
+            readPatient(app, jwt),
+            readPatient(app, jwt),
+        ]);
 
-        expect(responses.map((response) => response.status)).toEqual([200, 200, 200]);
+        expect(responses.map((response) => response.status)).toEqual([200, 200, 200, 200, 200]);
         expect(issuer.requests.jwks).toBe(2);
     });
 
@@ -500,6 +506,47 @@ describe("signing key rotation", () => {
         // 而不是連線錯誤；刪掉那段 try/catch 會變成 fetch 的連線錯誤訊息。
         const body = (await response.json()) as { issue?: Array<{ diagnostics?: string }> };
         expect(body.issue?.[0]?.diagnostics).toContain(`matches kid '${rotated.kid}'`);
+    });
+
+    it("jwks — a rotation that resolves does not consume the unknown-kid refresh budget", async () => {
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "jwks");
+
+        // 預算上限是 5，這裡輪替 8 次：沒有攻擊者在場時，IdP 正常連續換金鑰
+        // 不該被自己的防護擋下（抓成功就退費，沒有人猜得出來的 kid 才計費）。
+        const rotations = 8;
+        const rotationStatuses: number[] = [];
+        for (let index = 0; index < rotations; index += 1) {
+            const rotated = await issuer.rotateSigningKey();
+            rotationStatuses.push(
+                (await readPatient(app, await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid)))
+                    .status,
+            );
+        }
+
+        expect(rotationStatuses).toEqual(Array.from({ length: rotations }, () => 200));
+        // 每次輪替各對外抓一次 JWKS，沒有因為預算邏輯而多抓
+        expect(issuer.requests.jwks).toBe(1 + rotations);
+        const jwksAfterRotations = issuer.requests.jwks;
+
+        // 退款不等於防護被關掉：攻擊者的未知 kid 仍然把對外抓取釘在上限內。
+        // `issuer.keys` 對應的是輪替前的 kid，現在 JWKS 只發布最後一把，因此這些
+        // token 帶的 kid 對 gateway 而言是未知的。
+        const attackerStatuses: number[] = [];
+        for (let index = 0; index < 12; index += 1) {
+            attackerStatuses.push(
+                (
+                    await readPatient(
+                        app,
+                        await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey, `attacker-kid-${index}`),
+                    )
+                ).status,
+            );
+        }
+
+        expect(attackerStatuses).toEqual(Array.from({ length: 12 }, () => 401));
+        expect(issuer.requests.jwks).toBe(jwksAfterRotations + 5);
     });
 
     it("jwks — caps how much JWKS traffic many distinct unknown kids can cause", async () => {

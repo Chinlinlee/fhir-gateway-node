@@ -20,6 +20,9 @@ type SigningKeySet = {
     keyCount: number;
 };
 
+/** 一次重新抓取的預算紀錄；`at` 是發起抓取的時間，用於時間窗過期判定。 */
+type RefreshCharge = { kid: string; at: number };
+
 async function loadKeySet(jwksUri: string, httpUtil: HttpUtil, timeoutMs?: number): Promise<SigningKeySet> {
     const body =
         timeoutMs === undefined
@@ -75,6 +78,10 @@ const JWKS_REFRESH_TIMEOUT_MS = 5000;
  *
  * - 對外工作量：時間窗內最多 `MAX_UNKNOWN_KID_REFRESHES` 次重新抓取，超過即拒絕（fail-closed）。
  * - 記憶體：時間窗紀錄最多保留同樣數量的 kid，因此不會無上限成長。
+ *
+ * **預算只算抓了仍然對不上的 kid**：輪替成功時該筆會被退費，沒有攻擊者時 IdP 正常
+ * 連續換金鑰不會被自己的防護擋下；攻擊者送來的未知 `kid` 則一定留下計費。
+ * 這裡刻意選擇「有界的拒絕服務」而不是「無界的放大」：預算用盡時一律拒絕，絕不放行。
  */
 const JWKS_REFRESH_WINDOW_MS = 60_000;
 const MAX_UNKNOWN_KID_REFRESHES = 5;
@@ -86,8 +93,12 @@ const MAX_UNKNOWN_KID_REFRESHES = 5;
  */
 export class OidcJwksSigningKeyResolver implements SigningKeyResolver {
     private keySet: SigningKeySet;
-    /** 時間窗內已為哪些 kid 重新抓過 JWKS；同一個 kid 不再重複抓，長度恆有上限 */
-    private readonly refreshedKids: Array<{ kid: string; at: number }> = [];
+    /**
+     * 時間窗內為哪些 kid 花過一次對外抓取、但抓完仍然解析不到的紀錄。
+     * 這一組同時是「每個 kid 只抓一次」的去重表與對外抓取的預算帳本：
+     * 輪替成功會退款移除，所以長度有上限（= 預算上限），且 IdP 正常輪替不佔預算。
+     */
+    private readonly unresolvedKids: RefreshCharge[] = [];
     /** 同一個 kid 的重新抓取只進行一次，同時抵達的請求共用同一個結果 */
     private readonly refreshesInFlight = new Map<string, Promise<void>>();
 
@@ -134,12 +145,15 @@ export class OidcJwksSigningKeyResolver implements SigningKeyResolver {
     }
 
     /**
-     * 對不認得的 kid 重新抓一次 JWKS；同一個 kid 在時間窗內只抓一次，成功與否都算抓過。
+     * 對不認得的 kid 重新抓一次 JWKS；同一個 kid 在時間窗內只抓一次。
+     *
+     * 預算在抓取**之前**先扣（先看有沒有額度），但抓完後若這個 `kid` 解析得到就退款；
+     * 抓不到或抓了仍對不上時紀錄留在視窗內，既不重複對外抓，也持續佔用預算。
      */
     private async refreshOnceFor(kid: string): Promise<void> {
         const now = Date.now();
-        while (this.refreshedKids.length > 0 && now - (this.refreshedKids[0]?.at ?? 0) >= JWKS_REFRESH_WINDOW_MS) {
-            this.refreshedKids.shift();
+        while (this.unresolvedKids.length > 0 && now - (this.unresolvedKids[0]?.at ?? 0) >= JWKS_REFRESH_WINDOW_MS) {
+            this.unresolvedKids.shift();
         }
         // 先等同一個 kid 進行中的重新抓取；不能在等待前就當成「抓過」，
         // 否則同時抵達的請求會直接略過重新抓取，拿著舊快照回 401。
@@ -149,18 +163,19 @@ export class OidcJwksSigningKeyResolver implements SigningKeyResolver {
             return;
         }
 
-        if (this.refreshedKids.some((refreshed) => refreshed.kid === kid)) {
+        if (this.unresolvedKids.some((unresolved) => unresolved.kid === kid)) {
             return;
         }
 
-        if (this.refreshedKids.length >= MAX_UNKNOWN_KID_REFRESHES) {
+        if (this.unresolvedKids.length >= MAX_UNKNOWN_KID_REFRESHES) {
             // 預算用盡：不再對外抓取，直接拒絕。絕不因為抓不到就放行。
             throw new AuthenticationError(
                 `Refusing to re-fetch the JWKS at ${this.jwksUri} for kid '${kid}': more than ${MAX_UNKNOWN_KID_REFRESHES} unknown kids were already seen within ${JWKS_REFRESH_WINDOW_MS}ms`,
             );
         }
-        this.refreshedKids.push({ kid, at: now });
-        const inFlight = this.refreshKeySet().finally(() => {
+        const charge = { kid, at: now };
+        this.unresolvedKids.push(charge);
+        const inFlight = this.refreshKeySet(charge).finally(() => {
             this.refreshesInFlight.delete(kid);
         });
         this.refreshesInFlight.set(kid, inFlight);
@@ -170,12 +185,24 @@ export class OidcJwksSigningKeyResolver implements SigningKeyResolver {
     /**
      * 重新抓取 JWKS 取代啟動快照。抓不到時保留原本的金鑰，這次請求以 401 收場，
      * 不讓 IdP 在輪替期間的故障變成 500。
+     *
+     * 抓取成功且這個 `kid` 解析得到時退款：能解析得到代表 IdP 真的發布了這把金鑰，
+     * 不是有人在猜 `kid`，因此不該佔用「未知 kid」的預算。
      */
-    private async refreshKeySet(): Promise<void> {
+    private async refreshKeySet(charge: RefreshCharge): Promise<void> {
         try {
             this.keySet = await loadKeySet(this.jwksUri, this.httpUtil, JWKS_REFRESH_TIMEOUT_MS);
         } catch (error) {
             console.warn(`Cannot refresh the JWKS at ${this.jwksUri}: ${formatErrorMessage(error)}`);
+            return;
+        }
+
+        if (!this.keySet.byKid.has(charge.kid)) {
+            return;
+        }
+        const index = this.unresolvedKids.indexOf(charge);
+        if (index >= 0) {
+            this.unresolvedKids.splice(index, 1);
         }
     }
 }
