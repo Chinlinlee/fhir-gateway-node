@@ -8,7 +8,7 @@ import { InvalidRequestError } from "../errors/invalid-request.error";
 import type { AccessCheckerRegistryService } from "../services/access-checker-registry.service";
 import type { AllowedQueriesCheckerService } from "../services/allowed-queries.service";
 import type { AuditEventService } from "../services/audit-event.service";
-import type { HttpFhirClientService } from "../services/http-fhir-client.service";
+import type { ForwardResponse, HttpFhirClientService } from "../services/http-fhir-client.service";
 import type { PatientFinderService } from "../services/patient-finder.service";
 import type { TokenVerifierService } from "../services/token-verifier.service";
 import { type AccessDecision, defaultUserWhoFromLaunch } from "../types/access-decision";
@@ -81,6 +81,20 @@ function createOperationOutcome(
         },
         { status },
     );
+}
+
+/**
+ * gateway 自己的 backend 憑證失效時的統一回應。
+ * 重新登入不可能修好它，所以不可回 401：對外只給固定訊息，原始錯誤（可能含本機檔案路徑）
+ * 只留在 server log。授權階段（access checker 查 backend）與轉發階段共用這個映射。
+ */
+function createBackendCredentialOutcome(
+    method: FhirRequestMethod,
+    requestPath: string,
+    error: BackendCredentialError,
+): Response {
+    console.error(`[fhir-proxy] 503 ${method} ${requestPath}: ${formatErrorMessage(error.cause ?? error)}`);
+    return createOperationOutcome(503, "transient", BACKEND_CREDENTIAL_UNAVAILABLE_MESSAGE);
 }
 
 function shouldReturnGzip(acceptEncodingHeader: string | null): boolean {
@@ -267,10 +281,7 @@ export abstract class FhirProxyController {
                             return createOperationOutcome(400, "forbidden", error.message);
                         }
                         if (error instanceof BackendCredentialError) {
-                            // gateway 自己的 backend 憑證失效：重新登入不可能修好，因此不可回 401。
-                            // 對外只給固定訊息，原始錯誤（可能含本機檔案路徑）只留在 server log。
-                            console.error(`[fhir-proxy] 503 ${method} ${requestPath}: ${error.message}`);
-                            return createOperationOutcome(503, "transient", BACKEND_CREDENTIAL_UNAVAILABLE_MESSAGE);
+                            return createBackendCredentialOutcome(method, requestPath, error);
                         }
                         const diagnostics =
                             error instanceof AuthenticationError
@@ -296,13 +307,24 @@ export abstract class FhirProxyController {
         const mutationRequest = buildRequestDetails(requestPath, method, queryParams, requestBody);
         const mutation = accessDecision.getRequestMutation?.(mutationRequest);
         const mutatedQueryParams = applyRequestMutation(queryParams, mutation);
-        const forwarded = await deps.httpFhirClient.handleRequest({
-            method,
-            requestPath,
-            queryParams: mutatedQueryParams,
-            headers: sourceHeaders,
-            body: bodyBytes,
-        });
+        let forwarded: ForwardResponse;
+        try {
+            forwarded = await deps.httpFhirClient.handleRequest({
+                method,
+                requestPath,
+                queryParams: mutatedQueryParams,
+                headers: sourceHeaders,
+                body: bodyBytes,
+            });
+        } catch (error) {
+            // 轉發時才解析的 gateway 憑證（GCP ADC）故障與授權階段同一種處理：
+            // 503 + 固定訊息，原始錯誤只留在 server log。
+            if (error instanceof BackendCredentialError) {
+                return createBackendCredentialOutcome(method, requestPath, error);
+            }
+            // upstream FHIR 自身的失敗維持原本的處理。
+            throw error;
+        }
 
         const decodedBodyBytes = decodeCompressedBody(forwarded.bodyBytes, forwarded.headers.get("content-encoding"));
         const rawResponseBody = Buffer.from(decodedBodyBytes).toString("utf8");
