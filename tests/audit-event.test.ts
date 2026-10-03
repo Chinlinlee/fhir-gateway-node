@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 
-import type { CryptoKey, JWTPayload } from "jose";
+import type { CryptoKey } from "jose";
 import { SignJWT } from "jose";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -111,11 +111,11 @@ describe("AuditEventService", () => {
                 display: "Dr. Smith",
                 identifier: { system: "http://issuer", value: "user-1" },
             },
-            jwtPayload: {
-                sub: "user-1",
-                azp: "test-app",
-                jti: "jwt-id",
-            } as JWTPayload,
+            agent: {
+                subject: "user-1",
+                authorizedParty: "test-app",
+                tokenId: "jwt-id",
+            },
             gatewayBaseUrl: "http://gateway/fhir",
             configuredActions: ["R"],
         });
@@ -157,7 +157,7 @@ describe("AuditEventService", () => {
                 resourceType: "Practitioner",
                 display: "Dr. Smith",
             },
-            jwtPayload: {} as JWTPayload,
+            agent: {},
             gatewayBaseUrl: "http://gateway/fhir",
             configuredActions: ["E"],
         });
@@ -190,7 +190,7 @@ describe("AuditEventService", () => {
                 resourceType: "Practitioner",
                 display: "Dr. Smith",
             },
-            jwtPayload: {} as JWTPayload,
+            agent: {},
             gatewayBaseUrl: "http://gateway/fhir",
             configuredActions: ["R"],
         });
@@ -222,7 +222,7 @@ describe("AuditEventService", () => {
                 resourceType: "Practitioner",
                 display: "Dr. Smith",
             },
-            jwtPayload: {} as JWTPayload,
+            agent: {},
             gatewayBaseUrl: "http://gateway/fhir",
             configuredActions: ["D"],
         });
@@ -255,7 +255,7 @@ describe("AuditEventService", () => {
                 resourceType: "Practitioner",
                 display: "No Audit",
             },
-            jwtPayload: {} as JWTPayload,
+            agent: {},
             gatewayBaseUrl: "http://gateway/fhir",
             configuredActions: ["C"],
         });

@@ -70,6 +70,17 @@ async function startUpstreamServer(): Promise<UpstreamServer> {
             return;
         }
 
+        if (req.method === "GET" && url.pathname === "/fhir/Observation/no-patient-param") {
+            if (url.searchParams.has("patient")) {
+                res.writeHead(400, { "content-type": "application/fhir+json" });
+                res.end(JSON.stringify({ resourceType: "OperationOutcome" }));
+                return;
+            }
+            res.writeHead(200, { "content-type": "application/fhir+json" });
+            res.end(JSON.stringify({ resourceType: "Observation", id: "no-patient-param" }));
+            return;
+        }
+
         if (req.method === "GET" && url.pathname === "/fhir/metadata") {
             res.writeHead(200, { "content-type": "application/fhir+json" });
             res.end(JSON.stringify({ resourceType: "CapabilityStatement", rest: [{}] }));
@@ -293,6 +304,27 @@ describe("Bearer authorization proxy flow", () => {
 
         expect(response.status).toBe(200);
         expect(((await response.json()) as { id: string }).id).toBe("enc-1");
+    });
+
+    it("does not inject a patient query parameter for a patient-mode token without a patient reference", async () => {
+        const config = createBaseConfig({
+            tokenIssuer: issuer.issuerUrl,
+            proxyTo: upstream.baseUrl,
+            accessChecker: "patient",
+        });
+        const app = createApp({ tokenVerifier, config });
+        const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
+            scope: "user/Observation.read",
+        });
+
+        const response = await app.handle(
+            new Request(`http://localhost${FHIR_API_PREFIX}/Observation/no-patient-param`, {
+                headers: { Authorization: `Bearer ${jwt}` },
+            }),
+        );
+
+        expect(response.status).toBe(200);
+        expect(((await response.json()) as { id: string }).id).toBe("no-patient-param");
     });
 
     it("returns 401 naming the missing launch context patient id for patient-mode token without patient", async () => {
