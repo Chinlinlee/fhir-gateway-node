@@ -85,7 +85,7 @@ export class OidcJwksSigningKeyResolver implements SigningKeyResolver {
             if (key) {
                 return key;
             }
-            // 金鑰輪替路徑：認出未知的 kid 時，在這裡重新載入 JWKS 後再拒絕
+            // JWKS 是啟動時載入的快照；輪替出新 kid 時需重新啟動 gateway 才會認得
             throw new AuthenticationError(`No signing key at ${this.jwksUri} matches kid '${kid}'`);
         }
 

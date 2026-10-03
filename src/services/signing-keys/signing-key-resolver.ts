@@ -15,8 +15,8 @@ export type VerificationKey = CryptoKey | KeyObject | Uint8Array;
 /**
  * 驗簽金鑰解析器（signing key resolver）：依 token 的 protected header 取得公鑰。
  *
- * 解析為 per-call：每次驗簽都會呼叫一次，因此未知的 kid 可在此重新載入金鑰，
- * 金鑰輪替不需要重啟 gateway。
+ * 解析為 per-call：每次驗簽都會依 protected header 的 kid 選一次金鑰。
+ * 金鑰在啟動時載入一次；JWKS 輪替出新的 kid 後需重新啟動 gateway 才會生效。
  */
 export interface SigningKeyResolver {
     resolveVerificationKey(protectedHeader: JWSHeaderParameters): Promise<VerificationKey>;
