@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { defaultUserWhoFromLaunch } from "../src/types/access-decision";
 
 describe("defaultUserWhoFromLaunch", () => {
-    it("prefers subject_name over name for display", () => {
+    it("builds the audit user from the launch agent's resolved display name and subject", () => {
         const who = defaultUserWhoFromLaunch({
             subject: "user-123",
             issuer: "https://issuer.example",
@@ -16,7 +16,7 @@ describe("defaultUserWhoFromLaunch", () => {
         });
     });
 
-    it("returns null when sub and iss are both missing", () => {
+    it("returns null when the launch agent carries neither subject nor issuer", () => {
         expect(defaultUserWhoFromLaunch({})).toBeNull();
     });
 });

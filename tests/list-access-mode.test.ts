@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
+import { DEFAULT_CLAIM_NAMES } from "../src/constants/claim-names";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
-import { LAUNCH_CLAIM_NAMES } from "../src/services/launch-context.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import type { LaunchContext, LaunchContextProvider } from "../src/types/launch-context";
@@ -167,7 +167,7 @@ describe("ACCESS_CHECKER=list over the app seam", () => {
     it("authorizes a patient the named FHIR List includes", async () => {
         const app = createListModeApp();
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [LAUNCH_CLAIM_NAMES.patientList]: PATIENT_LIST_ID,
+            [DEFAULT_CLAIM_NAMES.patientList]: PATIENT_LIST_ID,
             scope: "patient/Patient.read",
         });
 
@@ -184,7 +184,7 @@ describe("ACCESS_CHECKER=list over the app seam", () => {
     it("refuses a patient the named FHIR List does not include", async () => {
         const app = createListModeApp();
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [LAUNCH_CLAIM_NAMES.patientList]: PATIENT_LIST_ID,
+            [DEFAULT_CLAIM_NAMES.patientList]: PATIENT_LIST_ID,
             scope: "patient/Patient.read",
         });
 
@@ -199,7 +199,7 @@ describe("ACCESS_CHECKER=list over the app seam", () => {
     it("adds a newly created patient to the named FHIR List", async () => {
         const app = createListModeApp();
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [LAUNCH_CLAIM_NAMES.patientList]: PATIENT_LIST_ID,
+            [DEFAULT_CLAIM_NAMES.patientList]: PATIENT_LIST_ID,
             scope: "patient/Patient.write",
         });
 

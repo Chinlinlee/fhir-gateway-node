@@ -1,3 +1,9 @@
+import {
+    CLAIM_NAME_FIELDS,
+    type ClaimNames,
+    isClaimNameField,
+    STRUCTURAL_CLAIM_NAMES,
+} from "../constants/claim-names";
 import type {
     AuditEventActionCode,
     BackendType,
@@ -20,6 +26,7 @@ import {
 import type { GatewayConfig } from "./env.schema";
 import { GatewayConfigSchema } from "./env.schema";
 
+
 export class ConfigError extends Error {
     constructor(message: string) {
         super(message);
@@ -38,6 +45,63 @@ function requireEnv(env: EnvSource, key: string): string {
     }
 
     return value;
+}
+
+/**
+ * 解析 `TOKEN_CLAIM_NAMES`：邏輯欄位名 → claim 名稱的 JSON 物件。
+ *
+ * 啟動期驗證：格式錯誤、未知邏輯欄位、空 claim 名稱，或把結構性 claim（`iss` / `sub`）
+ * 當成可設定欄位，都在此擋下並在訊息中指名設定，讓啟動直接失敗。
+ *
+ * 注意：這個設定**無法**在啟動時驗證「某個 claim 名稱是否出現在 IdP 發出的 token」——
+ * 啟動時沒有 token。該層檢查在第一個 token 驗證後進行，見 launch context provider。
+ */
+function parseClaimNames(raw: string | undefined): Partial<ClaimNames> | undefined {
+    const trimmed = raw?.trim();
+    if (!trimmed) {
+        return undefined;
+    }
+
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(trimmed);
+    } catch {
+        throw new ConfigError(
+            `The environment variable ${ENV_KEYS.CLAIM_NAMES} must be valid JSON (got: ${raw})`,
+        );
+    }
+
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+        throw new ConfigError(
+            `The environment variable ${ENV_KEYS.CLAIM_NAMES} must be a JSON object mapping logical field ` +
+                `names to claim names (got: ${raw})`,
+        );
+    }
+
+    const claimNames: Partial<ClaimNames> = {};
+    for (const [field, claim] of Object.entries(parsed)) {
+        if (!isClaimNameField(field)) {
+            throw new ConfigError(
+                `The environment variable ${ENV_KEYS.CLAIM_NAMES} has unknown logical field '${field}' ` +
+                    `(allowed: ${CLAIM_NAME_FIELDS.join(", ")})`,
+            );
+        }
+        if (typeof claim !== "string" || claim.trim().length === 0) {
+            throw new ConfigError(
+                `The environment variable ${ENV_KEYS.CLAIM_NAMES}.${field} must be a non-empty claim name`,
+            );
+        }
+        const normalized = claim.trim();
+        if ((STRUCTURAL_CLAIM_NAMES as readonly string[]).includes(normalized)) {
+            throw new ConfigError(
+                `The environment variable ${ENV_KEYS.CLAIM_NAMES}.${field} may not use the structural claim ` +
+                    `'${normalized}' (${STRUCTURAL_CLAIM_NAMES.join(", ")} are defined by the gateway itself)`,
+            );
+        }
+        claimNames[field as keyof ClaimNames] = normalized;
+    }
+
+    return Object.keys(claimNames).length > 0 ? claimNames : undefined;
 }
 
 function parseAuditEventActions(raw: string | undefined): AuditEventActionCode[] {
@@ -135,6 +199,9 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
 
     validateAccessChecker(accessChecker, runMode);
 
+    // 啟動期驗證：設定結構錯誤時立即失敗，不進入 listen
+    const claimNames = parseClaimNames(env[ENV_KEYS.CLAIM_NAMES]);
+
     const auditEventActions = parseAuditEventActions(env[ENV_KEYS.AUDIT_EVENT_ACTIONS_CONFIG]);
 
     const wellKnownEndpoint = env[ENV_KEYS.WELL_KNOWN_ENDPOINT]?.trim() ?? DEFAULT_WELL_KNOWN_ENDPOINT;
@@ -159,6 +226,7 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
         signingKeySource,
         port,
         ...(allowedQueriesFile ? { allowedQueriesFile } : {}),
+        ...(claimNames ? { claimNames } : {}),
     };
 
     const result = GatewayConfigSchema.safeParse(candidate);

@@ -1,11 +1,10 @@
 import { describe, expect, it } from "vitest";
-
+import { DEFAULT_CLAIM_NAMES } from "../src/constants/claim-names";
 import { AuthenticationError } from "../src/errors/authentication.error";
 import {
     BasicAccessCheckerService,
     basicAccessCheckerFactory,
 } from "../src/services/access-checkers/basic-access-checker.service";
-import { SCOPES_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { extractSmartFhirScopesFromTokens, MergedSmartScopeChecker } from "../src/services/smart-scope.service";
 import { buildFhirRequest } from "./helpers/fhir-request";
@@ -74,7 +73,7 @@ describe("basicAccessCheckerFactory", () => {
     it("throws when JWT has no SMART FHIR scopes", () => {
         expect(() =>
             basicAccessCheckerFactory.create({
-                launch: launchContextFromClaims({ [SCOPES_CLAIM]: "openid profile" }),
+                launch: launchContextFromClaims({ [DEFAULT_CLAIM_NAMES.scopesSpaceDelimited]: "openid profile" }),
                 patientFinder: PatientFinderService.getInstance(),
             }),
         ).toThrow(AuthenticationError);
@@ -82,7 +81,7 @@ describe("basicAccessCheckerFactory", () => {
 
     it("creates checker when any principal scope is present", () => {
         const checker = basicAccessCheckerFactory.create({
-            launch: launchContextFromClaims({ [SCOPES_CLAIM]: "system/*.rs" }),
+            launch: launchContextFromClaims({ [DEFAULT_CLAIM_NAMES.scopesSpaceDelimited]: "system/*.rs" }),
             patientFinder: PatientFinderService.getInstance(),
         });
 

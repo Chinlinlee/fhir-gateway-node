@@ -1,12 +1,10 @@
 import { describe, expect, it } from "vitest";
-
+import { DEFAULT_CLAIM_NAMES } from "../src/constants/claim-names";
 import { AuthenticationError } from "../src/errors/authentication.error";
 import { InvalidRequestError } from "../src/errors/invalid-request.error";
 import {
-    PATIENT_CLAIM,
     PatientAccessCheckerService,
     patientAccessCheckerFactory,
-    SCOPES_CLAIM,
 } from "../src/services/access-checkers/patient-access-checker.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import {
@@ -330,8 +328,8 @@ describe("PatientAccessCheckerService", () => {
     });
 
     it("uses patient claim not patient_id", () => {
-        expect(PATIENT_CLAIM).toBe("patient");
-        expect(SCOPES_CLAIM).toBe("scope");
+        expect(DEFAULT_CLAIM_NAMES.patient).toBe("patient");
+        expect(DEFAULT_CLAIM_NAMES.scopesSpaceDelimited).toBe("scope");
     });
 
     it("factory accepts user scopes without patient claim", () => {
