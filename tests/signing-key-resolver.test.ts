@@ -1,14 +1,14 @@
 import { createServer, type Server } from "node:http";
 
-import { SignJWT, exportJWK, generateKeyPair, importJWK, type CryptoKey } from "jose";
+import { type CryptoKey, exportJWK, generateKeyPair, importJWK, SignJWT } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type App, createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
+import { DEFAULT_CLAIM_NAMES } from "../src/constants/claim-names";
 import { ENV_KEYS, type SigningKeySource } from "../src/constants/config";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
 import { StartupConnectionError } from "../src/errors/startup-connection.error";
-import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
 import type { ResolvedSigningKeys, SigningKeyResolver } from "../src/services/signing-keys/signing-key-resolver";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import type { HttpFetchFn } from "../src/utils/http.util";
@@ -16,8 +16,8 @@ import { HttpUtil } from "../src/utils/http.util";
 import {
     type IssuerTestServer,
     type IssuerTestServerOptions,
-    TEST_JWK_KID,
     startIssuerTestServer,
+    TEST_JWK_KID,
 } from "./helpers/issuer-test-server";
 
 const PATIENT_ID = "456";
@@ -61,7 +61,7 @@ async function startUpstreamServer(): Promise<UpstreamServer> {
 
 async function signPatientJwt(issuerUrl: string, privateKey: CryptoKey, kid?: string): Promise<string> {
     return await new SignJWT({
-        [PATIENT_CLAIM]: PATIENT_ID,
+        [DEFAULT_CLAIM_NAMES.patient]: PATIENT_ID,
         scope: "patient/Patient.read",
     })
         .setProtectedHeader({ alg: "RS256", ...(kid ? { kid } : {}) })

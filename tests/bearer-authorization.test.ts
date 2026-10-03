@@ -6,9 +6,10 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
+import { DEFAULT_CLAIM_NAMES } from "../src/constants/claim-names";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
 import { createDefaultAccessCheckerRegistry } from "../src/services/access-checker-registry.service";
-import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
+
 import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
@@ -175,7 +176,7 @@ describe("Bearer authorization proxy flow", () => {
             patientFinder: PatientFinderService.getInstance(),
         });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [PATIENT_CLAIM]: "456",
+            [DEFAULT_CLAIM_NAMES.patient]: "456",
             scope: "patient/Patient.read patient/Observation.read",
         });
 
@@ -207,7 +208,7 @@ describe("Bearer authorization proxy flow", () => {
         });
         const app = createApp({ tokenVerifier, config });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [PATIENT_CLAIM]: "456",
+            [DEFAULT_CLAIM_NAMES.patient]: "456",
             scope: "patient/Patient.read",
         });
 
@@ -260,7 +261,7 @@ describe("Bearer authorization proxy flow", () => {
         });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
             scope: "patient/*.*",
-            [PATIENT_CLAIM]: "456",
+            [DEFAULT_CLAIM_NAMES.patient]: "456",
         });
 
         const response = await app.handle(
@@ -292,7 +293,7 @@ describe("Bearer authorization proxy flow", () => {
         });
         const app = createApp({ tokenVerifier, config });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [PATIENT_CLAIM]: "456",
+            [DEFAULT_CLAIM_NAMES.patient]: "456",
             scope: "patient/Observation.read",
         });
 

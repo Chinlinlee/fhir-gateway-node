@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
+import { DEFAULT_CLAIM_NAMES } from "../src/constants/claim-names";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
-import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
 import * as issuerPolicyModule from "../src/services/issuer-policy/issuer-policy";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
@@ -90,7 +90,7 @@ async function createIssuerScopedApp(
     return {
         requestPatient: async (tokenIssuer: string): Promise<Response> => {
             const jwt = await new SignJWT({
-                [PATIENT_CLAIM]: "456",
+                [DEFAULT_CLAIM_NAMES.patient]: "456",
                 scope: "patient/Patient.read",
             })
                 .setProtectedHeader({ alg: "RS256" })
