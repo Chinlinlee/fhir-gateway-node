@@ -6,10 +6,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
-import { DEFAULT_CLAIM_NAMES } from "../src/constants/claim-names";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
 import { createDefaultAccessCheckerRegistry } from "../src/services/access-checker-registry.service";
-
+import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
 import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
@@ -176,7 +175,7 @@ describe("Bearer authorization proxy flow", () => {
             patientFinder: PatientFinderService.getInstance(),
         });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [DEFAULT_CLAIM_NAMES.patient]: "456",
+            [PATIENT_CLAIM]: "456",
             scope: "patient/Patient.read patient/Observation.read",
         });
 
@@ -208,7 +207,7 @@ describe("Bearer authorization proxy flow", () => {
         });
         const app = createApp({ tokenVerifier, config });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [DEFAULT_CLAIM_NAMES.patient]: "456",
+            [PATIENT_CLAIM]: "456",
             scope: "patient/Patient.read",
         });
 
@@ -261,7 +260,7 @@ describe("Bearer authorization proxy flow", () => {
         });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
             scope: "patient/*.*",
-            [DEFAULT_CLAIM_NAMES.patient]: "456",
+            [PATIENT_CLAIM]: "456",
         });
 
         const response = await app.handle(
@@ -293,7 +292,7 @@ describe("Bearer authorization proxy flow", () => {
         });
         const app = createApp({ tokenVerifier, config });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [DEFAULT_CLAIM_NAMES.patient]: "456",
+            [PATIENT_CLAIM]: "456",
             scope: "patient/Observation.read",
         });
 
@@ -368,5 +367,57 @@ describe("Bearer authorization proxy flow", () => {
         );
 
         expect(response.status).toBe(200);
+    });
+
+    it("uses the trimmed launch-context patient id for the injected patient parameter", async () => {
+        const config = createBaseConfig({
+            tokenIssuer: issuer.issuerUrl,
+            proxyTo: upstream.baseUrl,
+            accessChecker: "patient",
+        });
+        const app = createApp({ tokenVerifier, config });
+        // 有前後空白的 patient claim：注入與 access checker 都讀 trim 後的
+        // LaunchContext.patientId，所以兩者不可能對授權的 patient 不一致。
+        // 這裡回 200（trim 後注入 `Patient/456`）是刻意的，不是「以前也接受」：
+        // 未 trim 前注入的是 Patient/%20%20456%20，會 403。
+        const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
+            [PATIENT_CLAIM]: " 456 ",
+            scope: "patient/Observation.read",
+        });
+
+        const response = await app.handle(
+            new Request(`http://localhost${FHIR_API_PREFIX}/Observation/enc-1`, {
+                headers: { Authorization: `Bearer ${jwt}` },
+            }),
+        );
+
+        expect(response.status).toBe(200);
+        expect(((await response.json()) as { id: string }).id).toBe("enc-1");
+    });
+
+    it("basic checker denies a request the token's scopes do not cover", async () => {
+        const config = createBaseConfig({
+            tokenIssuer: issuer.issuerUrl,
+            proxyTo: upstream.baseUrl,
+            accessChecker: "basic",
+        });
+        const app = createApp({ tokenVerifier, config });
+        // scope 只給 Observation 的權限，卻要求寫 Patient
+        const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
+            scope: "patient/Observation.read",
+        });
+
+        const response = await app.handle(
+            new Request(`http://localhost${FHIR_API_PREFIX}/Patient/456`, {
+                method: "POST",
+                headers: {
+                    Authorization: `Bearer ${jwt}`,
+                    "content-type": "application/fhir+json",
+                },
+                body: JSON.stringify({ resourceType: "Patient" }),
+            }),
+        );
+
+        expect(response.status).toBe(403);
     });
 });

@@ -2,7 +2,6 @@ import { node } from "@elysia/node";
 import { Elysia } from "elysia";
 
 import type { GatewayConfig } from "./configs/env.schema";
-import { resolveClaimNameSettings } from "./constants/claim-names";
 import { corsPlugin } from "./middlewares/cors";
 import { fhirRoute } from "./routes/fhir.route";
 import { healthRoute } from "./routes/health.route";
@@ -14,7 +13,7 @@ import { AuditEventService } from "./services/audit-event.service";
 import { FhirBackendService } from "./services/fhir-backend.service";
 import { GcpAccessTokenProviderService } from "./services/gcp-access-token-provider.service";
 import { HttpFhirClientService } from "./services/http-fhir-client.service";
-import { DefaultLaunchContextProvider } from "./services/launch-context.service";
+import { defaultLaunchContextProvider } from "./services/launch-context.service";
 import { PatientFinderService } from "./services/patient-finder.service";
 import type { TokenVerifierService } from "./services/token-verifier.service";
 import type { LaunchContextProvider } from "./types/launch-context";
@@ -31,14 +30,6 @@ export type CreateAppOptions = {
     auditEventService?: AuditEventService;
 };
 
-/**
- * 由設定組出 launch context provider；claim 名稱設定只有一處（`TOKEN_CLAIM_NAMES`），
- * 設定缺漏時退回今日的 claim 名稱，行為與設定前一致。
- */
-function createLaunchContextProvider(config: GatewayConfig): LaunchContextProvider {
-    return new DefaultLaunchContextProvider(resolveClaimNameSettings(config.claimNames));
-}
-
 export const createApp = (options?: CreateAppOptions) => {
     const app = new Elysia({ adapter: node() }).use(corsPlugin).use(healthRoute);
     const gcpTokenProvider = options?.config?.backendType === "GCP" ? new GcpAccessTokenProviderService() : null;
@@ -48,26 +39,35 @@ export const createApp = (options?: CreateAppOptions) => {
     }
 
     if (options?.tokenVerifier && options.config) {
-        const fhirBackend = options.fhirBackend ?? new FhirBackendService({ baseUrl: options.config.proxyTo });
+        const config = options.config;
+        // FhirBackendService 只在真的有人要用時才建立：AuditEventService 與 list checker。
+        const fhirBackend =
+            options.fhirBackend ??
+            (options.auditEventService === undefined || config.accessChecker === "list"
+                ? new FhirBackendService({
+                      baseUrl: config.proxyTo,
+                      ...(gcpTokenProvider ? { getBearerToken: () => gcpTokenProvider.getAccessToken() } : {}),
+                  })
+                : undefined);
         app.use(
             fhirRoute({
-                config: options.config,
+                config,
                 tokenVerifier: options.tokenVerifier,
-                launchContextProvider: options.launchContextProvider ?? createLaunchContextProvider(options.config),
-                fhirBackend,
+                launchContextProvider: options.launchContextProvider ?? defaultLaunchContextProvider,
+                ...(fhirBackend ? { fhirBackend } : {}),
                 allowedQueries:
-                    options.allowedQueries ??
-                    AllowedQueriesCheckerService.loadFromFile(options.config.allowedQueriesFile),
+                    options.allowedQueries ?? AllowedQueriesCheckerService.loadFromFile(config.allowedQueriesFile),
                 accessCheckerRegistry: options.accessCheckerRegistry ?? createDefaultAccessCheckerRegistry(),
                 patientFinder: options.patientFinder ?? PatientFinderService.getInstance(),
                 httpFhirClient:
                     options.httpFhirClient ??
                     new HttpFhirClientService({
-                        proxyTo: options.config.proxyTo,
-                        backendType: options.config.backendType,
-                        ...(gcpTokenProvider ? { getGcpAccessToken: () => gcpTokenProvider.getAccessToken() } : {}),
+                        proxyTo: config.proxyTo,
+                        backendType: config.backendType,
                     }),
-                auditEventService: options.auditEventService ?? new AuditEventService(fhirBackend),
+                ...(options.auditEventService || !fhirBackend
+                    ? {}
+                    : { auditEventService: new AuditEventService(fhirBackend) }),
             }),
         );
     }

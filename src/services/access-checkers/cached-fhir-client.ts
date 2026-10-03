@@ -7,6 +7,13 @@ import { normalizeFhirClientPath } from "./list-access-checker.util";
 const EMPTY_BUNDLE: fhir4.Bundle = { resourceType: "Bundle", type: "searchset", total: 0, entry: [] };
 
 /**
+ * 單輪預載同時對外發出的查詢上限。
+ * 一個 transaction bundle 可以帶數百個 patient，controller 讀 request body 沒有大小上限；
+ * 不設上限時單一請求就能驅動任意數量的並行 backend 請求，因此逐批消化查詢。
+ */
+const MAX_WARM_CONCURRENCY = 8;
+
+/**
  * List checker 在授權階段使用的同步 FHIR client。
  *
  * `AccessChecker.checkAccess` 是同步契約，但 backend 查詢是 I/O；因此真正的請求
@@ -59,11 +66,13 @@ export class CachedFhirClient implements HttpFhirClientLike {
         }
 
         const queries = [...this.unresolved];
-        await Promise.all(
-            queries.map(async (query) => {
-                this.responses.set(normalizeFhirClientPath(query), await this.fetchBundle(query));
-            }),
-        );
+        for (let start = 0; start < queries.length; start += MAX_WARM_CONCURRENCY) {
+            await Promise.all(
+                queries.slice(start, start + MAX_WARM_CONCURRENCY).map(async (query) => {
+                    this.responses.set(normalizeFhirClientPath(query), await this.fetchBundle(query));
+                }),
+            );
+        }
         return true;
     }
 

@@ -22,10 +22,12 @@ gateway 啟動時只抓一次 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 的 OIDC di
 | `keycloak-public-key` | 只走 legacy 路徑；issuer root URL 沒有 `public_key` 時啟動失敗 |
 
 - `jwks`（標準路徑）：以 `jwks_uri` 的 JWKS 驗簽，依 token 的 `kid` 選金鑰。任何標準 OIDC provider（Keycloak、Logto、Casdoor、Auth0、Entra…）都可直接使用。
-- `jwks` 路徑支援**金鑰輪替**：遇到 token 帶了 gateway 尚未見過的 `kid` 時，會重新抓一次 JWKS 再選一次金鑰，因此 IdP 換金鑰不需重啟 gateway。同一個 `kid` 只會重新抓一次；IdP 在重新抓取期間連不上時該請求以 401 收場。
+- `jwks` 路徑支援**金鑰輪替**：遇到 token 帶了 gateway 尚未見過的 `kid` 時，會重新抓一次 JWKS 再選一次金鑰，因此 IdP 換金鑰不需重啟 gateway。IdP 在重新抓取期間連不上時該請求以 401 收場。
+- 未知 `kid` 的重新抓取有**速率上限**：`jose` 是以**未驗證**的 protected header 選金鑰，因此任何語法合法的 JWT 帶著任意的 `kid` 都會觸發重新抓取。gateway 在 60 秒內最多為 5 個未知 `kid` 對外抓取 JWKS，超過就直接 401（不再對外連線）；時間窗過去後恢復正常輪替。
+- `kid` 缺漏時：JWKS 只發布**一把**可用金鑰就用它驗簽（與 legacy `keycloak-public-key` adapter 忽略 `kid` 的行為一致）；發布**多把**時無法唯一決定用哪一把驗簽，一律 401。
 - `keycloak-public-key`（legacy adapter）：GET `TOKEN_ISSUER` 的 **root URL**，解析 Keycloak 專屬的 `public_key`（base64 SPKI DER）。保留給既有 Keycloak 部署。
 - 明確選擇的路徑不可用時**不會**靜默退回另一條路徑，啟動會直接失敗並在訊息中指名 `SIGNING_KEY_SOURCE`。
-- IdP 無法連線時會依啟動重試（3 次）後失敗，訊息指名 `TOKEN_ISSUER` 並附上原始原因。
+- IdP 無法連線時會依啟動重試（3 次）後失敗。抓 OIDC discovery document 失敗時訊息指名 `TOKEN_ISSUER`；抓 `jwks_uri` 失敗時訊息指名 `SIGNING_KEY_SOURCE`（因為出問題的是驗簽金鑰來源），兩者都附上原始原因。
 
 仍為 Keycloak 專屬的設定：`ALLOW_TOKEN_ISSUER_HOST_MISMATCH`（依 Keycloak 的 `/realms/<name>` 路徑判斷 issuer 等價）。`TOKEN_ISSUER` 與 `WELL_KNOWN_ENDPOINT` 則是標準 OIDC 設定。
 
@@ -39,38 +41,14 @@ gateway 啟動時只抓一次 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 的 OIDC di
 
 三個策略都不接受時回 401。策略只透過 `IssuerPolicy` 介面使用，其他呼叫端無法繞過 policy 單獨套用。
 
-### Claim 名稱設定（`TOKEN_CLAIM_NAMES`）
-
-「token 的哪個 claim 帶著 patient / patient-list / scopes」由單一選填 JSON 設定決定，換 IdP 因此是設定變更，不需要改授權程式碼。設定格式為「邏輯欄位名 → claim 名稱」的 JSON 物件：
-
-```bash
-TOKEN_CLAIM_NAMES={"patient":"fhir_patient","patientList":"fhir_list"}
-```
-
-| 邏輯欄位 | 預設 claim 名稱 | 用途 |
-| --- | --- | --- |
-| `patient` | `patient` | 授權的 patient id（patient 模式） |
-| `patientList` | `patient_list` | patient-list id（list 模式） |
-| `scopesSpaceDelimited` | `scope` | 空白分隔的 SMART scopes |
-| `scopesArray` | `scp` | RFC 9068 陣列形式的 SMART scopes |
-| `authorizedParty` | `azp` | AuditEvent 的 authorized party |
-| `tokenId` | `jti` | AuditEvent 的 token id |
-| `subjectName` | `subject_name` | 顯示名稱（優先於 `name`） |
-| `name` | `name` | 顯示名稱（次選） |
-
-- **未設定或空物件時沿用上表預設名稱**，行為與設定前完全一致；既有 Keycloak 部署不需要任何變更。
-- `iss` 與 `sub` 是 gateway 自身的**結構性 claim**（issuer policy 比對與 OIDC 主體），不接受覆寫；設定成這兩個名稱會讓啟動直接失敗。
-- 啟動時會驗證設定本身：JSON 格式、未知邏輯欄位、空 claim 名稱、結構性 claim 覆寫，任一不合法都讓啟動失敗並在訊息中指名 `TOKEN_CLAIM_NAMES`。
-- **設定了 claim 名稱、但 token 完全沒有任何一個這些名稱時，gateway 回 500**（附帶指名 `TOKEN_CLAIM_NAMES` 的訊息），而不是 401。這是部署設定錯誤，不是授權拒絕，因此刻意與 401 區分開，避免與真正的授權拒絕混在一起。只缺其中一個（例如 patient-mode token 沒有 patient claim）仍維持原本的 401。
-
 ## SMART Scopes 的兩種交付形式（ScopeResolver）
 
 IdP 交付 SMART scopes 有兩種標準化形式，gateway 兩種都接受，由單一 `ScopeResolver` 正規化後交給 access checker：
 
 | 形式 | claim | 說明 |
 | --- | --- | --- |
-| 空白分隔字串 | `scope`（`TOKEN_CLAIM_NAMES` 的 `scopesSpaceDelimited`） | OAuth 2.0 標準形式，也是現行 Keycloak 部署的行為 |
-| 字串陣列 | `scp`（`TOKEN_CLAIM_NAMES` 的 `scopesArray`） | RFC 9068 標準形式，多數其他 IdP 預設採用 |
+| 空白分隔字串 | `scope` | OAuth 2.0 標準形式，也是現行 Keycloak 部署的行為 |
+| 字串陣列 | `scp` | RFC 9068 標準形式，多數其他 IdP 預設採用 |
 
 - **兩者並存時以 `scp` 為準**：`scp` 是 RFC 9068 的標準形式，IdP 同時發出兩者等同於刻意宣告採用新形式。
 - **兩種形式的每一個 entry 都走同一套 SMART v2 文法驗證**（`src/services/smart-scope.service.ts`），接受陣列形式**不會**放寬可接受的 scope 字串集合；不符合文法的 entry 一律略過。
@@ -128,7 +106,7 @@ Access Checker 是 gateway 在 JWT 驗證通過、且 Allowed Queries 未放行�
 
 | 類型 | 說明 |
 | --- | --- |
-| `AccessChecker` | 每個請求建立一個實例；實作 `checkAccess(request)` |
+| `AccessChecker` | 每個請求建立一個實例；實作 `checkAccess(request)`，可選實作 `prepare(request)`（見下方 [fhirBackend](#access-checker)） |
 | `AccessCheckerFactory` | thread-safe；從 LaunchContext 等 context 建立 `AccessChecker` |
 | `AccessCheckerCreateContext` | Factory 可用依賴：`launch`、`patientFinder`、（選用）`fhirBackend` |
 | `FhirRequestDetails` | 請求摘要：`requestPath`、`requestType`、`queryParams`、`requestBody?` |
@@ -221,7 +199,7 @@ const patientListId = context.launch.patientListId; // string | undefined
 const agent = context.launch.agent; // { authorizedParty?, issuer?, tokenId?, subject?, displayName? }
 ```
 
-Access checker **不得**直接讀 raw JWT claims，也不得出現 claim 名稱字面值；claim 名稱只存在於 `src/constants/claim-names.ts` 的 `DEFAULT_CLAIM_NAMES`，並可由 `TOKEN_CLAIM_NAMES` 覆寫（見 [Claim 名稱設定](#claim-名稱設定token_claim_names)）。自訂 checker 需要新的 token 欄位時，擴充 `LaunchContext` 與 provider，不要在 checker 裡加 `payload[claim]`。
+Access checker **不得**直接讀 raw JWT claims；claim 名稱只存在於 `LaunchContextProvider`（`src/services/launch-context.service.ts` 的 `LAUNCH_CLAIM_NAMES`）。自訂 checker 需要新的 token 欄位時，擴充 `LaunchContext` 與 provider，不要在 checker 裡加 `payload[claim]`。
 
 Launch context 欄位缺少或格式錯誤時拋 `AuthenticationError`（回 401），訊息會命名缺少的邏輯欄位；請求格式錯誤拋 `InvalidRequestError`（回 400）。
 
@@ -244,6 +222,14 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 
 若 checker 需在授權階段查詢 backend（如 `list` checker 驗證 FHIR List membership），Factory 可取用 context 的 `fhirBackend`。`checkAccess` 是同步契約，因此實際的 backend 請求發生在 `AccessChecker.prepare(request)`：`FhirProxyController` 在 `checkAccess` 前 `await` 它，內建的 `list` checker 以 `CachedFhirClient` 預載同步判斷所需的全部查詢結果；預載後仍查不到的查詢一律走拒絕路徑。單元測試可直接注入同步 mock client（參考 `tests/helpers/mock-http-fhir-client.ts`）。
 
+預載時同時對外發出的查詢有上限（每次 8 筆），避免單一 transaction bundle 帶入數百個 patient 就驅動同等數量的並行 backend 請求。
+
+`ACCESS_CHECKER=list` 之外，若自訂 checker 也要在授權階段查 backend，`createApp` 預設不會為它建立 `FhirBackendService`；請在建構時自行注入 `fhirBackend`。
+
+**GCP 部署的 backend 憑證**
+
+`BACKEND_TYPE=GCP` 時，轉發請求、list mode 的 FHIR List membership 查詢、以及把新建成 Patient 加回 access List 的 PATCH，都使用同一組 ADC（Application Default Credentials）access token。token 會過期，因此每次請求前重新解析。
+
 **SMART Scope**
 
 內建 `patient` / `basic` checker 使用 `smart-scope.service.ts` 解析 scope 與 CRUDS 權限，自訂 checker 可重用 `SmartScopeChecker`、`MergedSmartScopeChecker`。
@@ -255,7 +241,6 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 | `AuthenticationError` | 401 | Launch context 欄位缺失、scope 不足、Factory 初始化失敗 |
 | `InvalidRequestError` | 400 | 請求 body / path 無法解析 |
 | `accessDenied()` | 403 | 授權邏輯判定拒絕（不拋例外） |
-| `ClaimConfigurationError` | 500 | `TOKEN_CLAIM_NAMES` 設定的 claim 名稱在 token 中一個都沒有（部署設定錯誤，非授權拒絕） |
 
 ### 內建 Checker 一覽
 
@@ -292,7 +277,6 @@ cp env.example .env
 
 - `RUN_MODE`：`PROD`（預設）或 `DEV`（容忍 JWT `iss` 與 `TOKEN_ISSUER` 不同）
 - `SIGNING_KEY_SOURCE`：驗簽金鑰來源（trust path）：`auto`（預設）、`jwks`、`keycloak-public-key`。見 [Identity Provider（驗簽金鑰來源）](#identity-provider驗簽金鑰來源)
-- `TOKEN_CLAIM_NAMES`：Launch context 的 claim 名稱設定（JSON 物件，邏輯欄位名 → claim 名稱）。留空時沿用現行名稱，行為與設定前一致。見 [Claim 名稱設定](#claim-名稱設定token_claim_names)
 - `ALLOW_TOKEN_ISSUER_HOST_MISMATCH`：**Keycloak 專屬**。`true` 時，PROD 下允許 JWT `iss` 的 host 與 `TOKEN_ISSUER` 不同、但 realm path 相同（預設 `false`）
 - `PORT`：HTTP listen port（預設 `3000`）
 - `WELL_KNOWN_ENDPOINT`：預設 `.well-known/openid-configuration`

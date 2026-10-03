@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import { FHIR_API_PREFIX, WELL_KNOWN_SMART_CONFIGURATION_PATH } from "../src/constants/routes";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
-import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
+import { type IssuerTestServer, startIssuerTestServer, TEST_JWKS_PATH } from "./helpers/issuer-test-server";
 
 const WELL_KNOWN_URL = `${FHIR_API_PREFIX}/${WELL_KNOWN_SMART_CONFIGURATION_PATH}`;
 
@@ -37,7 +37,8 @@ describe("GET /fhir/.well-known/smart-configuration", () => {
         expect(body.issuer).toBe("https://token.issuer/realms/test");
         expect(body.authorization_endpoint).toBe("https://token.issuer/protocol/openid-connect/auth");
         expect(body.token_endpoint).toBe("https://token.issuer/protocol/openid-connect/token");
-        expect(body.jwks_uri).toBe("https://token.issuer/protocol/openid-connect/certs");
+        // stub IdP 宣告的 jwks_uri 一律指向本機（見 issuer-test-server），gateway 原樣代理
+        expect(body.jwks_uri).toBe(`${server.issuerUrl}${TEST_JWKS_PATH}`);
         expect(body.grant_types_supported).toEqual(["authorization_code"]);
         expect(body.response_types_supported).toEqual([
             "code",
