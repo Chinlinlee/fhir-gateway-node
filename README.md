@@ -39,6 +39,19 @@ gateway 啟動時只抓一次 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 的 OIDC di
 
 三個策略都不接受時回 401。策略只透過 `IssuerPolicy` 介面使用，其他呼叫端無法繞過 policy 單獨套用。
 
+## SMART Scopes 的兩種交付形式（ScopeResolver）
+
+IdP 交付 SMART scopes 有兩種標準化形式，gateway 兩種都接受，由單一 `ScopeResolver` 正規化後交給 access checker：
+
+| 形式 | claim | 說明 |
+| --- | --- | --- |
+| 空白分隔字串 | `scope` | OAuth 2.0 標準形式，也是現行 Keycloak 部署的行為 |
+| 字串陣列 | `scp` | RFC 9068 標準形式，多數其他 IdP 預設採用 |
+
+- **兩者並存時以 `scp` 為準**：`scp` 是 RFC 9068 的標準形式，IdP 同時發出兩者等同於刻意宣告採用新形式。
+- **兩種形式的每一個 entry 都走同一套 SMART v2 文法驗證**（`src/services/smart-scope.service.ts`），接受陣列形式**不會**放寬可接受的 scope 字串集合；不符合文法的 entry 一律略過。
+- **v1 `read`/`write` 到 `cruds` 的相容處理在 resolver 內完成**（`read` → READ + SEARCH，`write` → CREATE + UPDATE + DELETE），因此 access checker 只看得到已解析的 v2 permissions，不會讀 scope claim。
+
 ## Basic Access Checker（跨 principal 合併 CRUDS）
 
 `ACCESS_CHECKER=basic` 時：
@@ -98,6 +111,7 @@ Access Checker 是 gateway 在 JWT 驗證通過、且 Allowed Queries 未放行�
 | `AccessDecision` | 授權結果；可選附帶 mutation / postProcess / audit user |
 | `LaunchContext` | verified token 轉譯出的 IdP 中立 DTO：`subject`、`patientId?`、`patientListId?`、`scopes`、`agent` |
 | `LaunchContextProvider` | 由 verified token 建立 `LaunchContext`；**唯一**知道 claim 名稱的地方 |
+| `ScopeResolver` | 由 token claims 解析 SMART scopes；接受 `scope` 字串與 RFC 9068 `scp` 陣列兩種標準形式 |
 
 請求處理順序（`FhirProxyController`）：
 
