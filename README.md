@@ -11,6 +11,23 @@
 - realm 請使用 `smart`
 - patient-based flow 需使用 `patient` claim（JWT claim key: `patient`）
 
+## Identity Provider（驗簽金鑰來源）
+
+gateway 啟動時只抓一次 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 的 OIDC discovery document，這份文件同時用於取得驗簽金鑰與代理 `.well-known/smart-configuration`。驗簽金鑰的取得方式由 `SIGNING_KEY_SOURCE` 決定：
+
+| 值 | 行為 |
+| --- | --- |
+| `auto`（預設） | 先用 discovery document 的 `jwks_uri`；取不到就退回 legacy `public_key` |
+| `jwks` | 只走標準路徑；discovery document 沒有 `jwks_uri` 時啟動失敗 |
+| `keycloak-public-key` | 只走 legacy 路徑；issuer root URL 沒有 `public_key` 時啟動失敗 |
+
+- `jwks`（標準路徑）：以 `jwks_uri` 的 JWKS 驗簽，依 token 的 `kid` 選金鑰。任何標準 OIDC provider（Keycloak、Logto、Casdoor、Auth0、Entra…）都可直接使用。
+- `keycloak-public-key`（legacy adapter）：GET `TOKEN_ISSUER` 的 **root URL**，解析 Keycloak 專屬的 `public_key`（base64 SPKI DER）。保留給既有 Keycloak 部署。
+- 明確選擇的路徑不可用時**不會**靜默退回另一條路徑，啟動會直接失敗並在訊息中指名 `SIGNING_KEY_SOURCE`。
+- IdP 無法連線時會依啟動重試（3 次）後失敗，訊息指名 `TOKEN_ISSUER` 並附上原始原因。
+
+仍為 Keycloak 專屬的設定：`ALLOW_TOKEN_ISSUER_HOST_MISMATCH`（依 Keycloak 的 `/realms/<name>` 路徑判斷 issuer 等價）。`TOKEN_ISSUER` 與 `WELL_KNOWN_ENDPOINT` 則是標準 OIDC 設定。
+
 ## Basic Access Checker（跨 principal 合併 CRUDS）
 
 `ACCESS_CHECKER=basic` 時：
@@ -220,7 +237,8 @@ cp env.example .env
 常用選填：
 
 - `RUN_MODE`：`PROD`（預設）或 `DEV`（容忍 JWT `iss` 與 `TOKEN_ISSUER` 不同）
-- `ALLOW_TOKEN_ISSUER_HOST_MISMATCH`：`true` 時，PROD 下允許 JWT `iss` 的 host 與 `TOKEN_ISSUER` 不同、但 realm path 相同（預設 `false`）
+- `SIGNING_KEY_SOURCE`：驗簽金鑰來源（trust path）：`auto`（預設）、`jwks`、`keycloak-public-key`。見 [Identity Provider（驗簽金鑰來源）](#identity-provider驗簽金鑰來源)
+- `ALLOW_TOKEN_ISSUER_HOST_MISMATCH`：**Keycloak 專屬**。`true` 時，PROD 下允許 JWT `iss` 的 host 與 `TOKEN_ISSUER` 不同、但 realm path 相同（預設 `false`）
 - `PORT`：HTTP listen port（預設 `3000`）
 - `WELL_KNOWN_ENDPOINT`：預設 `.well-known/openid-configuration`
 - `ALLOWED_QUERIES_FILE`：Allowed Queries JSON 檔案路徑（見下方 [Allowed Queries 設定檔](#allowed-queries-設定檔)）

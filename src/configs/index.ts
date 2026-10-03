@@ -1,4 +1,9 @@
-import type { AuditEventActionCode, BackendType, RunMode } from "../constants/config";
+import type {
+    AuditEventActionCode,
+    BackendType,
+    RunMode,
+    SigningKeySource,
+} from "../constants/config";
 
 import {
     AUDIT_EVENT_ACTION_CODES,
@@ -6,15 +11,19 @@ import {
     DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH,
     DEFAULT_PORT,
     DEFAULT_RUN_MODE,
+    DEFAULT_SIGNING_KEY_SOURCE,
     DEFAULT_WELL_KNOWN_ENDPOINT,
     ENV_KEYS,
+    SIGNING_KEY_SOURCES,
 } from "../constants/config";
+
 import type { GatewayConfig } from "./env.schema";
 import { GatewayConfigSchema } from "./env.schema";
 
 export class ConfigError extends Error {
     constructor(message: string) {
         super(message);
+
         this.name = "ConfigError";
     }
 }
@@ -83,6 +92,16 @@ function parseRunMode(raw: string | undefined): RunMode {
     throw new ConfigError(`The environment variable ${ENV_KEYS.RUN_MODE} must be DEV or PROD (got: ${raw})`);
 }
 
+function parseSigningKeySource(raw: string | undefined): SigningKeySource {
+    const value = (raw?.trim().toLowerCase() ?? DEFAULT_SIGNING_KEY_SOURCE) as SigningKeySource;
+    if (SIGNING_KEY_SOURCES.includes(value)) {
+        return value;
+    }
+    throw new ConfigError(
+        `The environment variable ${ENV_KEYS.SIGNING_KEY_SOURCE} must be jwks, keycloak-public-key or auto (got: ${raw})`,
+    );
+}
+
 function validateAccessChecker(accessChecker: string, runMode: RunMode): void {
     if (accessChecker === "permissive" && runMode !== "DEV") {
         // 僅開發模式允許
@@ -112,6 +131,7 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
         ENV_KEYS.ALLOW_TOKEN_ISSUER_HOST_MISMATCH,
         DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH,
     );
+    const signingKeySource = parseSigningKeySource(env[ENV_KEYS.SIGNING_KEY_SOURCE]);
 
     validateAccessChecker(accessChecker, runMode);
 
@@ -136,6 +156,7 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
         wellKnownEndpoint,
         runMode,
         allowTokenIssuerHostMismatch,
+        signingKeySource,
         port,
         ...(allowedQueriesFile ? { allowedQueriesFile } : {}),
     };
