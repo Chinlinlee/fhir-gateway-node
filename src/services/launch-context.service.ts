@@ -1,18 +1,19 @@
 import type { JWTPayload } from "jose";
 
 import type { LaunchContext, LaunchContextProvider } from "../types/launch-context";
+import type { ScopeResolver } from "../types/scope-resolver";
 import type { VerifiedJwt } from "../types/verified-jwt";
-import { extractSmartFhirScopesFromTokens } from "./smart-scope.service";
+import { defaultScopeResolver, SCOPE_CLAIM_NAMES } from "./scope-resolver.service";
 
 /**
- * LaunchContext 的 claim 名稱；claim 名稱設定化（換 IdP）只需改動此處。
+ * Launch context 的 claim 名稱；claim 名稱設定化（換 IdP）只需改動此處。
  * Single place that knows claim names; the authorization layer never reads raw claims.
  */
 export const LAUNCH_CLAIM_NAMES = {
     subject: "sub",
     patient: "patient",
     patientList: "patient_list",
-    scopes: "scope",
+    scopes: SCOPE_CLAIM_NAMES.spaceDelimited,
     authorizedParty: "azp",
     issuer: "iss",
     tokenId: "jti",
@@ -37,6 +38,8 @@ function claimValue(payload: JWTPayload, claim: string): string | undefined {
  * Default provider preserving today's claim names and behaviour.
  */
 export class DefaultLaunchContextProvider implements LaunchContextProvider {
+    constructor(private readonly scopeResolver: ScopeResolver = defaultScopeResolver) {}
+
     create(token: VerifiedJwt): LaunchContext {
         const payload = token.payload;
         const authorizedParty = claimAsString(payload, LAUNCH_CLAIM_NAMES.authorizedParty);
@@ -45,13 +48,12 @@ export class DefaultLaunchContextProvider implements LaunchContextProvider {
         const subject = claimAsString(payload, LAUNCH_CLAIM_NAMES.subject);
         const displayName =
             claimAsString(payload, LAUNCH_CLAIM_NAMES.subjectName) ?? claimAsString(payload, LAUNCH_CLAIM_NAMES.name);
-        const scopesClaim = claimValue(payload, LAUNCH_CLAIM_NAMES.scopes);
 
         return {
             subject,
             patientId: claimValue(payload, LAUNCH_CLAIM_NAMES.patient),
             patientListId: claimValue(payload, LAUNCH_CLAIM_NAMES.patientList),
-            scopes: extractSmartFhirScopesFromTokens(scopesClaim ? scopesClaim.split(/\s+/) : []),
+            scopes: this.scopeResolver.resolve(payload),
             agent: {
                 ...(authorizedParty !== undefined ? { authorizedParty } : {}),
                 ...(issuer !== undefined ? { issuer } : {}),
