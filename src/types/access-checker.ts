@@ -3,7 +3,7 @@ import type { BundlePatients } from "./bundle-patients";
 import type { FhirBundle } from "./fhir-bundle";
 import type { FhirRequestDetails } from "./fhir-request";
 import type { HttpFhirClientLike } from "./http-fhir-client";
-import type { VerifiedJwt } from "./verified-jwt";
+import type { LaunchContext } from "./launch-context";
 
 export type { AccessDecision, AuditUserWho, FhirProxyResponse } from "./access-decision";
 export type { RequestMutation } from "./request-mutation";
@@ -21,9 +21,10 @@ export type PatientFinderLike = {
 /**
  * 建立 AccessChecker 所需依賴（HttpFhirClient 等於 Phase 7 補上）。
  * Dependencies for creating an AccessChecker (HttpFhirClient etc. in Phase 7).
+ * Access checkers read the IdP-neutral LaunchContext, never raw JWT claims.
  */
 export type AccessCheckerCreateContext = {
-    jwt: VerifiedJwt;
+    launch: LaunchContext;
     patientFinder: PatientFinderLike;
     httpFhirClient?: HttpFhirClientLike;
 };

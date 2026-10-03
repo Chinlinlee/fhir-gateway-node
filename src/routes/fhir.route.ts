@@ -10,12 +10,15 @@ import type { HttpFhirClientService } from "../services/http-fhir-client.service
 import type { PatientFinderService } from "../services/patient-finder.service";
 import type { TokenVerifierService } from "../services/token-verifier.service";
 
+import type { LaunchContextProvider } from "../types/launch-context";
+
 export type FhirRouteDeps = {
     config: GatewayConfig;
     tokenVerifier: TokenVerifierService;
     httpFhirClient: HttpFhirClientService;
     allowedQueries: AllowedQueriesCheckerService;
     accessCheckerRegistry: AccessCheckerRegistryService;
+    launchContextProvider: LaunchContextProvider;
     patientFinder: PatientFinderService;
     auditEventService?: AuditEventService;
 };

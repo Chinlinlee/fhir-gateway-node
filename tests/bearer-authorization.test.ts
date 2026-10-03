@@ -1,18 +1,18 @@
 import { createServer, type Server } from "node:http";
 import { gunzipSync } from "node:zlib";
 
-import { SignJWT, type CryptoKey } from "jose";
+import { type CryptoKey, SignJWT } from "jose";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
-import type { AccessChecker, AccessCheckerFactory } from "../src/types/access-checker";
 import { createDefaultAccessCheckerRegistry } from "../src/services/access-checker-registry.service";
-import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
 import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
+import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
+import type { AccessChecker, AccessCheckerFactory } from "../src/types/access-checker";
 import { allowedQueriesFixturePath } from "./helpers/allowed-queries-fixture";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
 
@@ -293,5 +293,47 @@ describe("Bearer authorization proxy flow", () => {
 
         expect(response.status).toBe(200);
         expect(((await response.json()) as { id: string }).id).toBe("enc-1");
+    });
+
+    it("returns 401 naming the missing launch context patient id for patient-mode token without patient", async () => {
+        const config = createBaseConfig({
+            tokenIssuer: issuer.issuerUrl,
+            proxyTo: upstream.baseUrl,
+            accessChecker: "patient",
+        });
+        const app = createApp({ tokenVerifier, config });
+        const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
+            scope: "patient/Patient.read",
+        });
+
+        const response = await app.handle(
+            new Request(`http://localhost${FHIR_API_PREFIX}/Patient/456`, {
+                headers: { Authorization: `Bearer ${jwt}` },
+            }),
+        );
+
+        expect(response.status).toBe(401);
+        const body = (await response.json()) as { issue?: Array<{ diagnostics?: string }> };
+        expect(body.issue?.[0]?.diagnostics).toContain("patientId");
+    });
+
+    it("basic checker authorizes from launch context scopes", async () => {
+        const config = createBaseConfig({
+            tokenIssuer: issuer.issuerUrl,
+            proxyTo: upstream.baseUrl,
+            accessChecker: "basic",
+        });
+        const app = createApp({ tokenVerifier, config });
+        const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
+            scope: "patient/Patient.read",
+        });
+
+        const response = await app.handle(
+            new Request(`http://localhost${FHIR_API_PREFIX}/Patient/456`, {
+                headers: { Authorization: `Bearer ${jwt}` },
+            }),
+        );
+
+        expect(response.status).toBe(200);
     });
 });

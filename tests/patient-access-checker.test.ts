@@ -22,6 +22,7 @@ import {
     readAccessCheckerFixture,
 } from "./helpers/access-checker-fixture";
 import { buildFhirRequest } from "./helpers/fhir-request";
+import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 
 function createPatientChecker(scopesClaim = DEFAULT_TEST_SCOPES_CLAIM): PatientAccessCheckerService {
     const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
@@ -335,10 +336,7 @@ describe("PatientAccessCheckerService", () => {
 
     it("factory accepts user scopes without patient claim", () => {
         const checker = patientAccessCheckerFactory.create({
-            jwt: {
-                payload: { scope: "user/Observation.rs" },
-                protectedHeader: { alg: "RS256" },
-            },
+            launch: launchContextFromClaims({ scope: "user/Observation.rs" }),
             patientFinder: PatientFinderService.getInstance(),
         });
 
@@ -349,10 +347,7 @@ describe("PatientAccessCheckerService", () => {
 
     it("factory accepts system scopes without patient claim", () => {
         const checker = patientAccessCheckerFactory.create({
-            jwt: {
-                payload: { scope: "system/*.rs" },
-                protectedHeader: { alg: "RS256" },
-            },
+            launch: launchContextFromClaims({ scope: "system/*.rs" }),
             patientFinder: PatientFinderService.getInstance(),
         });
 
@@ -362,10 +357,7 @@ describe("PatientAccessCheckerService", () => {
     it("factory still requires patient claim for patient scopes", () => {
         expect(() =>
             patientAccessCheckerFactory.create({
-                jwt: {
-                    payload: { scope: "patient/Observation.rs" },
-                    protectedHeader: { alg: "RS256" },
-                },
+                launch: launchContextFromClaims({ scope: "patient/Observation.rs" }),
                 patientFinder: PatientFinderService.getInstance(),
             }),
         ).toThrow(AuthenticationError);
