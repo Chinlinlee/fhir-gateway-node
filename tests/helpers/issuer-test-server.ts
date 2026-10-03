@@ -29,6 +29,9 @@ export type IssuerTestServerOptions = {
     publishJwksUri?: boolean;
 };
 
+/** JWKS 端點的可用性；unreachable 用來模擬輪替期間 IdP 連不上 */
+export type JwksAvailability = "available" | "unreachable";
+
 export type IssuerTestRequests = {
     /** GET issuer root URL（Keycloak public_key）次數 */
     root: number;
@@ -46,6 +49,10 @@ export type IssuerTestServer = {
     keys: IssuerTestKeys & { kid: string };
     jwksPath: string;
     requests: IssuerTestRequests;
+    /** 輪替簽章金鑰：改發新的 kid 與金鑰，並回傳新的金鑰組 */
+    rotateSigningKey: () => Promise<IssuerTestKeys & { kid: string }>;
+    /** 設定 JWKS 端點是否可連線，用來模擬輪替期間 IdP 不可用 */
+    setJwksAvailability: (availability: JwksAvailability) => void;
     close: () => Promise<void>;
 };
 
@@ -65,12 +72,24 @@ export async function startIssuerTestServer(
     const { publicKey, privateKey } = await generateKeyPair("RS256", {
         extractable: true,
     });
-    const publicKeyBase64 = await exportSpkiDerBase64(publicKey);
-    const jwk = { ...(await exportJWK(publicKey)), alg: "RS256", kid: TEST_JWK_KID };
+    let publicKeyBase64 = await exportSpkiDerBase64(publicKey);
+    let jwk: Record<string, unknown> = { ...(await exportJWK(publicKey)), alg: "RS256", kid: TEST_JWK_KID };
+    let jwksAvailability: JwksAvailability = "available";
     const discoveryFixture = JSON.parse(readFileSync(join(fixturesDir, "idp_keycloak_config.json"), "utf8"));
 
     let issuerUrl = "";
     const requests: IssuerTestRequests = { root: 0, wellKnown: 0, jwks: 0 };
+    let rotationCount = 0;
+
+    /** 輪替簽章金鑰：JWKS 與 root public_key 同時改發新的 kid 與金鑰 */
+    const rotateSigningKey = async (): Promise<IssuerTestKeys & { kid: string }> => {
+        rotationCount += 1;
+        const rotated = await generateKeyPair("RS256", { extractable: true });
+        const kid = `${TEST_JWK_KID}-rotated-${rotationCount}`;
+        publicKeyBase64 = await exportSpkiDerBase64(rotated.publicKey);
+        jwk = { ...(await exportJWK(rotated.publicKey)), alg: "RS256", kid };
+        return { ...rotated, publicKeyBase64, kid };
+    };
 
     /** 本次啟動提供給 gateway 的 discovery document（預設沿用 Keycloak fixture） */
     const buildDiscoveryDocument = (): string => {
@@ -101,6 +120,11 @@ export async function startIssuerTestServer(
 
         if (req.method === "GET" && path === TEST_JWKS_PATH) {
             requests.jwks += 1;
+            if (jwksAvailability === "unreachable") {
+                // 直接斷線，讓 gateway 的 fetch 以連線錯誤收場
+                req.socket.destroy();
+                return;
+            }
             if (!serveJwks) {
                 res.writeHead(404).end();
                 return;
@@ -137,6 +161,10 @@ export async function startIssuerTestServer(
         wellKnownConfig: buildDiscoveryDocument(),
         jwksPath: TEST_JWKS_PATH,
         requests,
+        rotateSigningKey,
+        setJwksAvailability: (availability: JwksAvailability) => {
+            jwksAvailability = availability;
+        },
         keys: { publicKey, privateKey, publicKeyBase64, kid: TEST_JWK_KID },
         close: () =>
             new Promise((resolve, reject) => {
