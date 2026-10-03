@@ -1,9 +1,9 @@
-import { createServer, type Server } from "node:http";
 import { readFileSync } from "node:fs";
+import { createServer, type Server } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SignJWT, exportJWK, generateKeyPair, type CryptoKey } from "jose";
+import { type CryptoKey, exportJWK, generateKeyPair, SignJWT } from "jose";
 
 const fixturesDir = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures");
 
@@ -23,10 +23,15 @@ export type IssuerTestKeys = {
 export type IssuerTestServerOptions = {
     /** 是否在 issuer root URL 提供 Keycloak 風格的 public_key（預設 true） */
     servePublicKey?: boolean;
-    /** 是否在 TEST_JWKS_PATH 提供 JWKS，並讓 discovery document 的 jwks_uri 指向本機（預設 false） */
+    /** 是否在 TEST_JWKS_PATH 提供 JWKS（預設 false；false 時該端點回 404） */
     serveJwks?: boolean;
     /** discovery document 是否宣告 jwks_uri（預設 true）；false 時移除該欄位 */
     publishJwksUri?: boolean;
+    /**
+     * JWKS 同時發布幾把金鑰（預設 1）。>1 時另外生成的金鑰不帶在 `keys` 上，
+     * 測試多金鑰時 token 只能帶 kid 或完全沒有 kid 兩種形狀。
+     */
+    jwksKeyCount?: number;
 };
 
 /** JWKS 端點的可用性；unreachable 用來模擬輪替期間 IdP 連不上 */
@@ -61,6 +66,16 @@ async function exportSpkiDerBase64(publicKey: CryptoKey): Promise<string> {
     return Buffer.from(spki).toString("base64");
 }
 
+/** 多金鑰情境用的額外 JWKS 條目；不對外回傳私鑰，測試只能靠 kid 或無 kid 兩種形狀。 */
+async function generateExtraJwksKeys(count: number): Promise<Array<Record<string, unknown>>> {
+    const entries: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < count; index += 1) {
+        const { publicKey } = await generateKeyPair("RS256", { extractable: true });
+        entries.push({ ...(await exportJWK(publicKey)), alg: "RS256", kid: `${TEST_JWK_KID}-extra-${index + 1}` });
+    }
+    return entries;
+}
+
 /**
  * 本地 issuer 測試伺服器，對齊 Java TokenVerifierTest 的 HttpUtil mock。
  */
@@ -68,12 +83,13 @@ export async function startIssuerTestServer(
     wellKnownPath = "test",
     options: IssuerTestServerOptions = {},
 ): Promise<IssuerTestServer> {
-    const { servePublicKey = true, serveJwks = false, publishJwksUri = true } = options;
+    const { servePublicKey = true, serveJwks = false, publishJwksUri = true, jwksKeyCount = 1 } = options;
     const { publicKey, privateKey } = await generateKeyPair("RS256", {
         extractable: true,
     });
     let publicKeyBase64 = await exportSpkiDerBase64(publicKey);
     let jwk: Record<string, unknown> = { ...(await exportJWK(publicKey)), alg: "RS256", kid: TEST_JWK_KID };
+    const extraJwks = jwksKeyCount > 1 ? await generateExtraJwksKeys(jwksKeyCount - 1) : [];
     let jwksAvailability: JwksAvailability = "available";
     const discoveryFixture = JSON.parse(readFileSync(join(fixturesDir, "idp_keycloak_config.json"), "utf8"));
 
@@ -91,13 +107,16 @@ export async function startIssuerTestServer(
         return { ...rotated, publicKeyBase64, kid };
     };
 
-    /** 本次啟動提供給 gateway 的 discovery document（預設沿用 Keycloak fixture） */
+    /**
+     * 本次啟動提供給 gateway 的 discovery document（預設沿用 Keycloak fixture）。
+     * `jwks_uri` 一律指向本機 stub：指向 fixture 裡的外部 host 會讓未指定
+     * SIGNING_KEY_SOURCE 的測試真的對外連線。
+     */
     const buildDiscoveryDocument = (): string => {
         const discovery: Record<string, unknown> = { ...discoveryFixture };
-        if (serveJwks) {
+        if (publishJwksUri) {
             discovery.jwks_uri = `${issuerUrl}${TEST_JWKS_PATH}`;
-        }
-        if (!publishJwksUri) {
+        } else {
             delete discovery.jwks_uri;
         }
         return JSON.stringify(discovery, null, 4);
@@ -130,7 +149,7 @@ export async function startIssuerTestServer(
                 return;
             }
             res.writeHead(200, { "Content-Type": "application/json" });
-            res.end(JSON.stringify({ keys: [jwk] }));
+            res.end(JSON.stringify({ keys: [jwk, ...extraJwks] }));
             return;
         }
 

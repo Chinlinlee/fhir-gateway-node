@@ -1,12 +1,12 @@
 import { createServer, type Server } from "node:http";
 
-import { SignJWT, exportJWK, generateKeyPair, importJWK, type CryptoKey } from "jose";
+import { type CryptoKey, exportJWK, generateKeyPair, importJWK, SignJWT } from "jose";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { type App, createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
 import { ENV_KEYS, type SigningKeySource } from "../src/constants/config";
-import { FHIR_API_PREFIX } from "../src/constants/routes";
+import { FHIR_API_PREFIX, WELL_KNOWN_SMART_CONFIGURATION_PATH } from "../src/constants/routes";
 import { StartupConnectionError } from "../src/errors/startup-connection.error";
 import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
 import type { ResolvedSigningKeys, SigningKeyResolver } from "../src/services/signing-keys/signing-key-resolver";
@@ -16,8 +16,9 @@ import { HttpUtil } from "../src/utils/http.util";
 import {
     type IssuerTestServer,
     type IssuerTestServerOptions,
-    TEST_JWK_KID,
     startIssuerTestServer,
+    TEST_JWK_KID,
+    TEST_JWKS_PATH,
 } from "./helpers/issuer-test-server";
 
 const PATIENT_ID = "456";
@@ -78,10 +79,7 @@ function readPatient(app: App, jwt: string): Promise<Response> {
     );
 }
 
-function verifierConfig(
-    issuer: { issuerUrl: string; wellKnownPath: string },
-    signingKeySource?: SigningKeySource,
-) {
+function verifierConfig(issuer: { issuerUrl: string; wellKnownPath: string }, signingKeySource?: SigningKeySource) {
     return {
         tokenIssuer: issuer.issuerUrl,
         wellKnownEndpoint: issuer.wellKnownPath,
@@ -192,6 +190,7 @@ describe("SIGNING_KEY_SOURCE trust paths", () => {
 
     it("auto — falls back to the Keycloak adapter when the published jwks_uri cannot be fetched", async () => {
         vi.spyOn(console, "warn").mockImplementation(() => {});
+        // publishJwksUri=true + serveJwks=false：宣告了 jwks_uri 但端點回 404
         const issuer = await startIssuer({ servePublicKey: true, serveJwks: false });
         const upstream = await startUpstream();
         const app = await startGateway(issuer, upstream, "auto");
@@ -199,40 +198,129 @@ describe("SIGNING_KEY_SOURCE trust paths", () => {
         const response = await readPatient(app, await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey));
 
         expect(response.status).toBe(200);
+        // auto 必須真的先探過 jwks_uri 才回退；刪掉 auto 探測區塊這個計數就會是 0
+        expect(issuer.requests.jwks).toBeGreaterThanOrEqual(1);
         expect(issuer.requests.root).toBe(1);
     });
 
-    it.each(["jwks", "keycloak-public-key", "auto"] as const)(
-        "%s — rejects a token signed by the wrong key with 401",
-        async (signingKeySource) => {
-            const servesJwks = signingKeySource !== "keycloak-public-key";
-            const issuer = await startIssuer({ serveJwks: servesJwks, publishJwksUri: servesJwks });
-            const upstream = await startUpstream();
-            const app = await startGateway(issuer, upstream, signingKeySource);
-            const attacker = await generateKeyPair("RS256", { extractable: true });
-            const forgedJwt = await signPatientJwt(issuer.issuerUrl, attacker.privateKey, TEST_JWK_KID);
+    it("auto — authorizes a token carrying no kid when the IdP publishes exactly one JWKS key", async () => {
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true, jwksKeyCount: 1 });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "auto");
 
-            const response = await readPatient(app, forgedJwt);
+        // legacy Keycloak adapter 完全忽略 kid；標準路徑必須保留同樣的單金鑰容忍
+        const response = await readPatient(app, await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey));
 
-            expect(response.status).toBe(401);
-        },
-    );
+        expect(response.status).toBe(200);
+        expect(issuer.requests.jwks).toBe(1);
+        expect(issuer.requests.root).toBe(0);
+    });
+
+    it("auto — refuses a token carrying no kid when the IdP publishes several JWKS keys", async () => {
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true, jwksKeyCount: 3 });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "auto");
+
+        const response = await readPatient(app, await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey));
+
+        expect(response.status).toBe(401);
+        const body = (await response.json()) as { issue?: Array<{ diagnostics?: string }> };
+        expect(body.issue?.[0]?.diagnostics).toContain("no 'kid'");
+    });
+
+    it("jwks — authorizes a token carrying a published kid when the IdP publishes several keys", async () => {
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true, jwksKeyCount: 3 });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "jwks");
+
+        const response = await readPatient(
+            app,
+            await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey, TEST_JWK_KID),
+        );
+
+        expect(response.status).toBe(200);
+    });
+
+    it.each([
+        "jwks",
+        "keycloak-public-key",
+        "auto",
+    ] as const)("%s — rejects a token signed by the wrong key with 401", async (signingKeySource) => {
+        const servesJwks = signingKeySource !== "keycloak-public-key";
+        const issuer = await startIssuer({ serveJwks: servesJwks, publishJwksUri: servesJwks });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, signingKeySource);
+        const attacker = await generateKeyPair("RS256", { extractable: true });
+        const forgedJwt = await signPatientJwt(issuer.issuerUrl, attacker.privateKey, TEST_JWK_KID);
+
+        const response = await readPatient(app, forgedJwt);
+
+        expect(response.status).toBe(401);
+    });
 
     it("jwks — fails at startup naming the setting when the discovery document has no jwks_uri", async () => {
         const issuer = await startIssuer({ servePublicKey: true, serveJwks: false, publishJwksUri: false });
         const upstream = await startUpstream();
 
-        await expect(startGateway(issuer, upstream, "jwks")).rejects.toThrow(ENV_KEYS.SIGNING_KEY_SOURCE);
+        // 兩條分支的錯誤訊息都含 SIGNING_KEY_SOURCE，靠指名缺什麼才能分辨走錯分支
+        await expect(startGateway(issuer, upstream, "jwks")).rejects.toThrow(/jwks_uri/);
+        // 只讀 discovery document；絕不為了驗簽去 GET issuer root URL
+        expect(issuer.requests.wellKnown).toBe(1);
         expect(issuer.requests.root).toBe(0);
+        expect(issuer.requests.jwks).toBe(0);
     });
 
     it("keycloak-public-key — fails at startup naming the setting when public_key is absent", async () => {
         const issuer = await startIssuer({ servePublicKey: false, publishJwksUri: false });
         const upstream = await startUpstream();
 
-        await expect(startGateway(issuer, upstream, "keycloak-public-key")).rejects.toThrow(
-            ENV_KEYS.SIGNING_KEY_SOURCE,
+        await expect(startGateway(issuer, upstream, "keycloak-public-key")).rejects.toThrow(/public_key/);
+        // 明確選擇 legacy 路徑就必須真的去讀 issuer root URL
+        expect(issuer.requests.root).toBe(1);
+        expect(issuer.requests.jwks).toBe(0);
+    });
+
+    it("jwks — fails at startup naming SIGNING_KEY_SOURCE when the published jwks_uri is unreachable", async () => {
+        const discoveryDocument = JSON.stringify({
+            issuer: "https://idp.example/realms/smart",
+            jwks_uri: "https://idp.example/realms/smart/protocol/openid-connect/certs",
+        });
+        // 只答 discovery document；JWKS 端點一律連不上，啟動重試與錯誤包裝都走真實邏輯
+        const requestedUrls: string[] = [];
+        const httpUtil = new (class extends HttpUtil {
+            override async getText(url: string): Promise<string> {
+                requestedUrls.push(url);
+                if (url.endsWith("openid-configuration")) {
+                    return discoveryDocument;
+                }
+                throw new Error("connect ECONNREFUSED");
+            }
+        })();
+        vi.useFakeTimers();
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+
+        const promise = TokenVerifierService.create(
+            verifierConfig(
+                { issuerUrl: "https://idp.example/realms/smart", wellKnownPath: ".well-known/openid-configuration" },
+                "jwks",
+            ),
+            httpUtil,
         );
+        const assertion = expect(promise).rejects.toSatisfy((error: unknown) => {
+            expect(error).toBeInstanceOf(StartupConnectionError);
+            expect(error).toMatchObject({ envKey: ENV_KEYS.SIGNING_KEY_SOURCE, attempts: 4 });
+            return true;
+        });
+        const messageAssertion = expect(promise).rejects.toThrow(/'SIGNING_KEY_SOURCE'[\s\S]*connect ECONNREFUSED/);
+
+        await vi.advanceTimersByTimeAsync(3000);
+        await vi.advanceTimersByTimeAsync(6000);
+        await vi.advanceTimersByTimeAsync(9000);
+        await assertion;
+        await messageAssertion;
+
+        // discovery document 成功 1 次，之後 4 次都打在 JWKS 端點上
+        expect(requestedUrls.filter((url) => url.includes(TEST_JWKS_PATH))).toHaveLength(4);
     });
 
     it("fetches the issuer discovery document once at startup", async () => {
@@ -242,8 +330,13 @@ describe("SIGNING_KEY_SOURCE trust paths", () => {
 
         const jwt = await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey, TEST_JWK_KID);
         const proxyResponse = await readPatient(app, jwt);
+        const wellKnownResponse = await app.handle(
+            new Request(`http://localhost${FHIR_API_PREFIX}/${WELL_KNOWN_SMART_CONFIGURATION_PATH}`),
+        );
 
         expect(proxyResponse.status).toBe(200);
+        expect(wellKnownResponse.status).toBe(200);
+        expect(await wellKnownResponse.json()).toEqual(JSON.parse(issuer.wellKnownConfig));
         // 同一份 discovery 文件同時供金鑰解析與 .well-known/smart-configuration 代理使用
         expect(issuer.requests.wellKnown).toBe(1);
         expect(issuer.requests.root).toBe(0);
@@ -255,10 +348,7 @@ describe("SIGNING_KEY_SOURCE trust paths", () => {
         const fetchFn = vi.fn<HttpFetchFn>().mockRejectedValue(new Error("connect ECONNREFUSED"));
 
         const promise = TokenVerifierService.create(
-            verifierConfig(
-                { issuerUrl: "http://127.0.0.1:1/realms/smart", wellKnownPath: "test" },
-                "jwks",
-            ),
+            verifierConfig({ issuerUrl: "http://127.0.0.1:1/realms/smart", wellKnownPath: "test" }, "jwks"),
             new HttpUtil(fetchFn),
         );
         const assertion = expect(promise).rejects.toSatisfy((error: unknown) => {
@@ -323,6 +413,7 @@ describe("signing key rotation", () => {
 
     afterEach(async () => {
         vi.restoreAllMocks();
+        vi.useRealTimers();
         await Promise.all(closers.splice(0).map((close) => close()));
     });
 
@@ -391,7 +482,7 @@ describe("signing key rotation", () => {
         expect(issuer.requests.jwks).toBe(2);
     });
 
-    it("jwks — returns 401 when the IdP is unreachable during a key refresh", async () => {
+    it("jwks — returns 401 naming the unmatched kid when the IdP is unreachable during a key refresh", async () => {
         vi.spyOn(console, "warn").mockImplementation(() => {});
         const issuer = await startIssuer({ servePublicKey: false, serveJwks: true });
         const upstream = await startUpstream();
@@ -405,6 +496,78 @@ describe("signing key rotation", () => {
         );
 
         expect(response.status).toBe(401);
+        // 重新抓取失敗必須被 refreshKeySet 吃掉並保留舊快照，因此診斷是「kid 對不上」
+        // 而不是連線錯誤；刪掉那段 try/catch 會變成 fetch 的連線錯誤訊息。
+        const body = (await response.json()) as { issue?: Array<{ diagnostics?: string }> };
+        expect(body.issue?.[0]?.diagnostics).toContain(`matches kid '${rotated.kid}'`);
+    });
+
+    it("jwks — caps how much JWKS traffic many distinct unknown kids can cause", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "jwks");
+
+        // `jose` 以未驗證的 protected header 選金鑰，所以這些 token 攻擊者自己就能簽
+        const unknownKids = Array.from({ length: 40 }, (_unused, index) => `attacker-kid-${index}`);
+        const burstStatuses: number[] = [];
+        for (const kid of unknownKids) {
+            const response = await readPatient(
+                app,
+                await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey, kid),
+            );
+            burstStatuses.push(response.status);
+        }
+        const jwksAfterBurst = issuer.requests.jwks;
+
+        // 沒有上限時這裡會是 1（啟動）+ 40（每個未知 kid 一次）
+        expect(burstStatuses).toEqual(unknownKids.map(() => 401));
+        expect(jwksAfterBurst).toBeLessThanOrEqual(6);
+
+        const secondBurst: number[] = [];
+        for (const kid of unknownKids) {
+            const response = await readPatient(
+                app,
+                await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey, kid),
+            );
+            secondBurst.push(response.status);
+        }
+
+        // 預算用盡後完全不再對外抓取，而不是每個 kid 再抓一次
+        expect(secondBurst).toEqual(unknownKids.map(() => 401));
+        expect(issuer.requests.jwks).toBe(jwksAfterBurst);
+    });
+
+    it("jwks — resumes unknown-kid refreshes once the refresh budget window has passed", async () => {
+        vi.spyOn(console, "warn").mockImplementation(() => {});
+        const issuer = await startIssuer({ servePublicKey: false, serveJwks: true });
+        const upstream = await startUpstream();
+        const app = await startGateway(issuer, upstream, "jwks");
+        vi.useFakeTimers({ toFake: ["Date"] });
+
+        const rotated = await issuer.rotateSigningKey();
+        const jwt = await signPatientJwt(issuer.issuerUrl, rotated.privateKey, rotated.kid);
+        expect((await readPatient(app, jwt)).status).toBe(200);
+        const jwksAfterRotation = issuer.requests.jwks;
+
+        for (let index = 0; index < 10; index += 1) {
+            expect(
+                (await readPatient(app, await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey, `kid-${index}`)))
+                    .status,
+            ).toBe(401);
+        }
+        const jwksAfterExhaustion = issuer.requests.jwks;
+
+        vi.setSystemTime(Date.now() + 61_000);
+        const rotatedAgain = await issuer.rotateSigningKey();
+
+        // 預算只是速率上限，不是永久拒絕：時間窗過去後真正的輪替仍要能通過
+        expect(
+            (await readPatient(app, await signPatientJwt(issuer.issuerUrl, rotatedAgain.privateKey, rotatedAgain.kid)))
+                .status,
+        ).toBe(200);
+        expect(issuer.requests.jwks).toBeGreaterThan(jwksAfterExhaustion);
+        expect(jwksAfterExhaustion).toBeLessThanOrEqual(jwksAfterRotation + 5);
     });
 
     it("keycloak-public-key — does not pick up a rotated key", async () => {
