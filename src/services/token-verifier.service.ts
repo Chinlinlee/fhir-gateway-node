@@ -1,18 +1,18 @@
-import { createPublicKey, type KeyObject } from "node:crypto";
 import type { JWTVerifyOptions } from "jose";
 import { decodeJwt, decodeProtectedHeader, jwtVerify } from "jose";
 
 import type { GatewayConfig } from "../configs/env.schema";
 import { BEARER_PREFIX, SIGN_ALGORITHM } from "../constants/auth";
-import { ENV_KEYS } from "../constants/config";
+import { DEFAULT_SIGNING_KEY_SOURCE } from "../constants/config";
 import { AuthenticationError } from "../errors/authentication.error";
 import type { VerifiedJwt } from "../types/verified-jwt";
 import { HttpUtil } from "../utils/http.util";
-import { IssuerMetadataSchema } from "../validations/issuer-metadata.schema";
+import type { ResolvedSigningKeys, SigningKeyResolver } from "./signing-keys/signing-key-resolver";
+import { resolveSigningKeys } from "./signing-keys/signing-key-resolver";
 
 type TokenVerifierConfig = Pick<
     GatewayConfig,
-    "tokenIssuer" | "wellKnownEndpoint" | "runMode" | "allowTokenIssuerHostMismatch"
+    "tokenIssuer" | "wellKnownEndpoint" | "runMode" | "allowTokenIssuerHostMismatch" | "signingKeySource"
 >;
 
 function normalizeIssuerPath(issuerUrl: string): string {
@@ -25,51 +25,57 @@ function normalizeIssuerPath(issuerUrl: string): string {
 }
 
 /**
- * Verifies OAuth 2.0 Bearer JWT (RS256 + Keycloak public_key).
+ * Verifies OAuth 2.0 Bearer JWT (RS256), 驗簽金鑰由 signing key resolver 提供。
  */
 export class TokenVerifierService {
     private readonly tokenIssuer: string;
-    private readonly wellKnownConfigJson: string;
-    private readonly publicKey: KeyObject;
+    private readonly discoveryDocument: string;
+    private readonly signingKeyResolver: SigningKeyResolver;
     private readonly devMode: boolean;
     private readonly allowTokenIssuerHostMismatch: boolean;
 
     private constructor(
         tokenIssuer: string,
-        wellKnownConfigJson: string,
-        publicKey: KeyObject,
+        discoveryDocument: string,
+        signingKeyResolver: SigningKeyResolver,
         devMode: boolean,
         allowTokenIssuerHostMismatch: boolean,
     ) {
         this.tokenIssuer = tokenIssuer;
-        this.wellKnownConfigJson = wellKnownConfigJson;
-        this.publicKey = publicKey;
+        this.discoveryDocument = discoveryDocument;
+        this.signingKeyResolver = signingKeyResolver;
         this.devMode = devMode;
         this.allowTokenIssuerHostMismatch = allowTokenIssuerHostMismatch;
     }
 
+    /**
+     * @param signingKeys 已解析好的驗簽金鑰來源；未提供時依 SIGNING_KEY_SOURCE 於啟動時解析。
+     */
     static async create(
         config: TokenVerifierConfig,
         httpUtil: HttpUtil = new HttpUtil(),
+        signingKeys?: ResolvedSigningKeys,
     ): Promise<TokenVerifierService> {
-        const publicKey = await TokenVerifierService.fetchAndDecodePublicKey(config.tokenIssuer, httpUtil);
-        const wellKnownConfigJson = await httpUtil.fetchWellKnownConfig(
-            config.tokenIssuer,
-            config.wellKnownEndpoint,
-            ENV_KEYS.TOKEN_ISSUER,
-        );
+        const resolved =
+            signingKeys ??
+            (await resolveSigningKeys({
+                tokenIssuer: config.tokenIssuer,
+                wellKnownEndpoint: config.wellKnownEndpoint,
+                signingKeySource: config.signingKeySource ?? DEFAULT_SIGNING_KEY_SOURCE,
+                httpUtil,
+            }));
 
         return new TokenVerifierService(
             config.tokenIssuer,
-            wellKnownConfigJson,
-            publicKey,
+            resolved.discoveryDocument,
+            resolved.resolver,
             config.runMode === "DEV",
             config.allowTokenIssuerHostMismatch,
         );
     }
 
     getWellKnownConfig(): string {
-        return this.wellKnownConfigJson;
+        return this.discoveryDocument;
     }
 
     /**
@@ -105,7 +111,11 @@ export class TokenVerifierService {
         const verifyOptions = this.buildVerifyOptions(issuer);
 
         try {
-            const result = await jwtVerify(bearerToken, this.publicKey, verifyOptions);
+            const result = await jwtVerify(
+                bearerToken,
+                (protectedHeader) => this.signingKeyResolver.resolveVerificationKey(protectedHeader),
+                verifyOptions,
+            );
             return {
                 payload: result.payload,
                 protectedHeader: result.protectedHeader,
@@ -155,32 +165,5 @@ export class TokenVerifierService {
         throw new AuthenticationError(
             `The token issuer ${jwtIssuer} does not match the expected token issuer ${this.tokenIssuer}`,
         );
-    }
-
-    private static async fetchAndDecodePublicKey(tokenIssuer: string, httpUtil: HttpUtil): Promise<KeyObject> {
-        const body = await httpUtil.getTextWithStartupRetry(tokenIssuer, ENV_KEYS.TOKEN_ISSUER);
-        let json: unknown;
-        try {
-            json = JSON.parse(body) as unknown;
-        } catch {
-            throw new AuthenticationError("Cannot parse issuer metadata as JSON for public_key");
-        }
-
-        const parsed = IssuerMetadataSchema.safeParse(json);
-        if (!parsed.success) {
-            throw new AuthenticationError("Cannot find 'public_key' in issuer metadata.");
-        }
-
-        try {
-            // Keycloak returns X.509 SPKI DER as base64 (Java X509EncodedKeySpec).
-            return createPublicKey({
-                key: Buffer.from(parsed.data.public_key, "base64"),
-                format: "der",
-                type: "spki",
-            });
-        } catch (error) {
-            const message = error instanceof Error ? error.message : "Invalid key material";
-            throw new AuthenticationError(`Invalid KeySpec: ${message}`);
-        }
     }
 }
