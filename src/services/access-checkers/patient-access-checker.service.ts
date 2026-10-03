@@ -9,9 +9,9 @@ import type { AccessDecision } from "../../types/access-decision";
 import type { FhirBundleEntry } from "../../types/fhir-bundle";
 import type { FhirRequestDetails } from "../../types/fhir-request";
 import { getResourceIdOrNull, isSameResourceType, parseResourcePath } from "../../utils/fhir.util";
-import { getJwtClaimIdOrFail, getJwtClaimOrFail } from "../../utils/jwt-claim.util";
+import { getLaunchIdOrFail } from "../../utils/launch-context.util";
+import { LAUNCH_CLAIM_NAMES } from "../launch-context.service";
 import {
-    extractSmartFhirScopesFromTokens,
     type SmartFhirScope,
     SmartScopeChecker,
     SmartScopePermission,
@@ -19,8 +19,12 @@ import {
 } from "../smart-scope.service";
 import { deniedAccessDecision, grantedAccessDecision, parseRequestBundle } from "./list-access-checker.util";
 
-export const PATIENT_CLAIM = "patient";
-export const SCOPES_CLAIM = "scope";
+/**
+ * Launch context 對應的 claim 名稱；唯一來源為 `LAUNCH_CLAIM_NAMES`（設定化見 issue #8）。
+ * Claim names for the launch context; `LAUNCH_CLAIM_NAMES` is the single source of truth.
+ */
+export const PATIENT_CLAIM = LAUNCH_CLAIM_NAMES.patient;
+export const SCOPES_CLAIM = LAUNCH_CLAIM_NAMES.scopes;
 
 export class PatientAccessCheckerService implements AccessChecker {
     private readonly authorizedPatientId: string | null;
@@ -383,10 +387,9 @@ function createSmartScopeCheckers(scopes: readonly SmartFhirScope[]): Map<SmartS
 
 export const patientAccessCheckerFactory: AccessCheckerFactory = {
     create(context: AccessCheckerCreateContext): AccessChecker {
-        const scopesClaim = getJwtClaimOrFail(context.jwt.payload, SCOPES_CLAIM);
-        const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
+        const scopes = context.launch.scopes;
         if (scopes.length === 0) {
-            throw new AuthenticationError("No SMART FHIR scopes found in JWT scope claim");
+            throw new AuthenticationError("No SMART FHIR scopes found in launch context");
         }
 
         const hasPatientScope = scopes.some((scope) => scope.principal === SmartScopePrincipal.PATIENT);
@@ -398,10 +401,12 @@ export const patientAccessCheckerFactory: AccessCheckerFactory = {
         let authorizedPatientId: string | null = null;
         if (hasPatientScope) {
             try {
-                authorizedPatientId = getJwtClaimIdOrFail(context.jwt.payload, PATIENT_CLAIM);
+                authorizedPatientId = getLaunchIdOrFail(context.launch, "patientId");
             } catch {
                 if (!hasBroadScope) {
-                    throw new AuthenticationError("Patient claim required for patient scopes");
+                    throw new AuthenticationError(
+                        "Missing required launch context field: patientId (required for patient scopes)",
+                    );
                 }
             }
         }

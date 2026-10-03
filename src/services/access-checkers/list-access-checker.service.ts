@@ -11,7 +11,7 @@ import type { BundlePatients } from "../../types/bundle-patients";
 import type { FhirRequestDetails } from "../../types/fhir-request";
 import type { HttpFhirClientLike } from "../../types/http-fhir-client";
 import { getResourceIdOrNull, isSameResourceType, isValidFhirId, parseResourcePath } from "../../utils/fhir.util";
-import { getJwtClaimIdOrFail } from "../../utils/jwt-claim.util";
+import { getLaunchIdOrFail } from "../../utils/launch-context.util";
 import {
     accessGrantedAndUpdateListForBundle,
     accessGrantedAndUpdateListForPatient,
@@ -24,8 +24,6 @@ import {
     serverListIncludesAnyPatient,
     toPatientReferenceQueries,
 } from "./list-access-checker.util";
-
-export const PATIENT_LIST_CLAIM = "patient_list";
 
 export class ListAccessCheckerService implements AccessChecker {
     private readonly httpFhirClient: HttpFhirClientLike;
@@ -290,7 +288,7 @@ export const listAccessCheckerFactory: AccessCheckerFactory = {
             throw new AuthenticationError("ListAccessChecker requires httpFhirClient");
         }
 
-        const patientListId = getJwtClaimIdOrFail(context.jwt.payload, PATIENT_LIST_CLAIM);
+        const patientListId = getLaunchIdOrFail(context.launch, "patientListId");
         return new ListAccessCheckerService(httpFhirClient, patientListId, context.patientFinder);
     },
 };

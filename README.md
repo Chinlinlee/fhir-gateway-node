@@ -64,10 +64,12 @@ Access Checker 是 gateway 在 JWT 驗證通過、且 Allowed Queries 未放行�
 | 類型 | 說明 |
 | --- | --- |
 | `AccessChecker` | 每個請求建立一個實例；實作 `checkAccess(request)` |
-| `AccessCheckerFactory` | thread-safe；從 JWT 等 context 建立 `AccessChecker` |
-| `AccessCheckerCreateContext` | Factory 可用依賴：`jwt`、`patientFinder`、（選用）`httpFhirClient` |
+| `AccessCheckerFactory` | thread-safe；從 LaunchContext 等 context 建立 `AccessChecker` |
+| `AccessCheckerCreateContext` | Factory 可用依賴：`launch`、`patientFinder`、（選用）`httpFhirClient` |
 | `FhirRequestDetails` | 請求摘要：`requestPath`、`requestType`、`queryParams`、`requestBody?` |
 | `AccessDecision` | 授權結果；可選附帶 mutation / postProcess / audit user |
+| `LaunchContext` | verified token 轉譯出的 IdP 中立 DTO：`subject`、`patientId?`、`patientListId?`、`scopes`、`agent` |
+| `LaunchContextProvider` | 由 verified token 建立 `LaunchContext`；**唯一**知道 claim 名稱的地方 |
 
 請求處理順序（`FhirProxyController`）：
 
@@ -144,16 +146,18 @@ createApp({ tokenVerifier, config: { ...config, accessChecker: "my-checker" }, a
 
 ### Factory 常用依賴
 
-**JWT claims**
+**LaunchContext**
 
 ```typescript
-import { getJwtClaimOrFail, getJwtClaimIdOrFail } from "../utils/jwt-claim.util";
-
-const scopes = getJwtClaimOrFail(context.jwt.payload, "scope");
-const patientId = getJwtClaimIdOrFail(context.jwt.payload, "patient");
+const scopes = context.launch.scopes;
+const patientId = context.launch.patientId; // string | undefined
+const patientListId = context.launch.patientListId; // string | undefined
+const agent = context.launch.agent; // { authorizedParty?, issuer?, tokenId?, subject?, displayName? }
 ```
 
-JWT claim 解析失敗應拋 `AuthenticationError`（回 401）；請求格式錯誤拋 `InvalidRequestError`（回 400）。
+Access checker **不得**直接讀 raw JWT claims；claim 名稱只存在於 `LaunchContextProvider`（`src/services/launch-context.service.ts` 的 `LAUNCH_CLAIM_NAMES`）。自訂 checker 需要新的 token 欄位時，擴充 `LaunchContext` 與 provider，不要在 checker 裡加 `payload[claim]`。
+
+Launch context 欄位缺少或格式錯誤時拋 `AuthenticationError`（回 401），訊息會命名缺少的邏輯欄位；請求格式錯誤拋 `InvalidRequestError`（回 400）。
 
 **PatientFinder**
 
@@ -182,7 +186,7 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 
 | 拋出 | HTTP | 情境 |
 | --- | --- | --- |
-| `AuthenticationError` | 401 | JWT claim 缺失、scope 不足、Factory 初始化失敗 |
+| `AuthenticationError` | 401 | Launch context 欄位缺失、scope 不足、Factory 初始化失敗 |
 | `InvalidRequestError` | 400 | 請求 body / path 無法解析 |
 | `accessDenied()` | 403 | 授權邏輯判定拒絕（不拋例外） |
 
@@ -191,8 +195,8 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 | 名稱 | `ACCESS_CHECKER` | 說明 |
 | --- | --- | --- |
 | Permissive | `permissive` | DEV only；有效 JWT 即放行 |
-| List | `list` | 依 JWT `patient_list` claim 限制可存取的 Patient 集合 |
-| Patient | `patient` | SMART patient/user/system scope + patient claim 綁定 |
+| List | `list` | 依 launch context 的 patient-list id 限制可存取的 Patient 集合 |
+| Patient | `patient` | SMART patient/user/system scope + launch context 的 patient id 綁定 |
 | Basic | `basic` | SMART scope CRUDS 合併檢查，不綁 patient |
 
 實作參考：

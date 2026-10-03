@@ -7,9 +7,10 @@ import {
 } from "../src/services/access-checker-registry.service";
 import type { AccessChecker, AccessCheckerFactory } from "../src/types/access-checker";
 import { accessGranted } from "../src/types/access-decision";
+import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 
 const stubContext = {
-    jwt: { payload: { sub: "user-1" }, protectedHeader: { alg: "RS256" } },
+    launch: launchContextFromClaims({ sub: "user-1" }),
     patientFinder: {
         findPatientsFromParams: () => new Set<string>(),
         findPatientsForAccessCheck: () => new Set<string>(),

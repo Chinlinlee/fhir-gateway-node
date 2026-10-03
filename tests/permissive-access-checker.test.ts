@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { ConfigError, loadGatewayConfig, minimalValidEnv } from "../src/configs";
 import { createDefaultAccessCheckerRegistry } from "../src/services/access-checker-registry.service";
 import { PermissiveAccessCheckerService } from "../src/services/access-checkers/permissive-access-checker.service";
+import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 import { buildFhirRequest } from "./helpers/fhir-request";
 
 describe("PermissiveAccessCheckerService", () => {
@@ -39,7 +40,7 @@ describe("permissive access checker config", () => {
     it("registry registers permissive factory", () => {
         const registry = createDefaultAccessCheckerRegistry();
         const checker = registry.create("permissive", {
-            jwt: { payload: { sub: "dev-user" }, protectedHeader: { alg: "RS256" } },
+            launch: launchContextFromClaims({ sub: "dev-user" }),
             patientFinder: {
                 findPatientsFromParams: () => new Set(),
                 findPatientsForAccessCheck: () => new Set(),

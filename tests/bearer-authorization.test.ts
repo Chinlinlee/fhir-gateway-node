@@ -294,4 +294,46 @@ describe("Bearer authorization proxy flow", () => {
         expect(response.status).toBe(200);
         expect(((await response.json()) as { id: string }).id).toBe("enc-1");
     });
+
+    it("returns 401 naming the missing launch context patient id for patient-mode token without patient", async () => {
+        const config = createBaseConfig({
+            tokenIssuer: issuer.issuerUrl,
+            proxyTo: upstream.baseUrl,
+            accessChecker: "patient",
+        });
+        const app = createApp({ tokenVerifier, config });
+        const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
+            scope: "patient/Patient.read",
+        });
+
+        const response = await app.handle(
+            new Request(`http://localhost${FHIR_API_PREFIX}/Patient/456`, {
+                headers: { Authorization: `Bearer ${jwt}` },
+            }),
+        );
+
+        expect(response.status).toBe(401);
+        const body = (await response.json()) as { issue?: Array<{ diagnostics?: string }> };
+        expect(body.issue?.[0]?.diagnostics).toContain("patientId");
+    });
+
+    it("basic checker authorizes from launch context scopes", async () => {
+        const config = createBaseConfig({
+            tokenIssuer: issuer.issuerUrl,
+            proxyTo: upstream.baseUrl,
+            accessChecker: "basic",
+        });
+        const app = createApp({ tokenVerifier, config });
+        const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
+            scope: "patient/Patient.read",
+        });
+
+        const response = await app.handle(
+            new Request(`http://localhost${FHIR_API_PREFIX}/Patient/456`, {
+                headers: { Authorization: `Bearer ${jwt}` },
+            }),
+        );
+
+        expect(response.status).toBe(200);
+    });
 });

@@ -13,6 +13,7 @@ import type { PatientFinderService } from "../services/patient-finder.service";
 import type { TokenVerifierService } from "../services/token-verifier.service";
 import { defaultUserWhoFromJwt, type AccessDecision } from "../types/access-decision";
 import type { FhirRequestDetails, FhirRequestMethod } from "../types/fhir-request";
+import type { LaunchContext, LaunchContextProvider } from "../types/launch-context";
 import type { VerifiedJwt } from "../types/verified-jwt";
 import { applyGzipResponseHeaders, decodeCompressedBody } from "../utils/compression.util";
 import { parseResourcePath } from "../utils/fhir.util";
@@ -23,6 +24,7 @@ type FhirProxyControllerDeps = {
     config: GatewayConfig;
     tokenVerifier: TokenVerifierService;
     httpFhirClient: HttpFhirClientService;
+    launchContextProvider: LaunchContextProvider;
     allowedQueries: AllowedQueriesCheckerService;
     accessCheckerRegistry: AccessCheckerRegistryService;
     patientFinder: PatientFinderService;
@@ -224,6 +226,7 @@ export abstract class FhirProxyController {
                     return createOperationOutcome(401, "login", diagnostics);
                 }
 
+                const launch = deps.launchContextProvider.create(verifiedJwt);
                 const jwtPatientClaim = verifiedJwt.payload[PATIENT_CLAIM];
                 verifiedJwtPatientClaim = typeof jwtPatientClaim === "string" ? jwtPatientClaim : undefined;
                 verifiedJwtPayload = verifiedJwt.payload;
@@ -243,7 +246,7 @@ export abstract class FhirProxyController {
                     let checkerDecision: AccessDecision;
                     try {
                         const checker = deps.accessCheckerRegistry.create(deps.config.accessChecker, {
-                            jwt: verifiedJwt,
+                            launch,
                             patientFinder: deps.patientFinder,
                         });
                         checkerDecision = checker.checkAccess(authenticatedRequest);

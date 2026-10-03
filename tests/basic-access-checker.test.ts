@@ -8,6 +8,7 @@ import {
 import { SCOPES_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { extractSmartFhirScopesFromTokens, MergedSmartScopeChecker } from "../src/services/smart-scope.service";
+import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 import { buildFhirRequest } from "./helpers/fhir-request";
 
 function createBasicChecker(scopesClaim: string): BasicAccessCheckerService {
@@ -73,10 +74,7 @@ describe("basicAccessCheckerFactory", () => {
     it("throws when JWT has no SMART FHIR scopes", () => {
         expect(() =>
             basicAccessCheckerFactory.create({
-                jwt: {
-                    payload: { [SCOPES_CLAIM]: "openid profile" },
-                    protectedHeader: { alg: "RS256" },
-                },
+                launch: launchContextFromClaims({ [SCOPES_CLAIM]: "openid profile" }),
                 patientFinder: PatientFinderService.getInstance(),
             }),
         ).toThrow(AuthenticationError);
@@ -84,10 +82,7 @@ describe("basicAccessCheckerFactory", () => {
 
     it("creates checker when any principal scope is present", () => {
         const checker = basicAccessCheckerFactory.create({
-            jwt: {
-                payload: { [SCOPES_CLAIM]: "system/*.rs" },
-                protectedHeader: { alg: "RS256" },
-            },
+            launch: launchContextFromClaims({ [SCOPES_CLAIM]: "system/*.rs" }),
             patientFinder: PatientFinderService.getInstance(),
         });
 
