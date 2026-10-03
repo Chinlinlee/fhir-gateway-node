@@ -23,7 +23,7 @@ gateway 啟動時只抓一次 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 的 OIDC di
 
 - `jwks`（標準路徑）：以 `jwks_uri` 的 JWKS 驗簽，依 token 的 `kid` 選金鑰。任何標準 OIDC provider（Keycloak、Logto、Casdoor、Auth0、Entra…）都可直接使用。
 - `jwks` 路徑支援**金鑰輪替**：遇到 token 帶了 gateway 尚未見過的 `kid` 時，會重新抓一次 JWKS 再選一次金鑰，因此 IdP 換金鑰不需重啟 gateway。IdP 在重新抓取期間連不上時該請求以 401 收場。
-- 未知 `kid` 的重新抓取有**速率上限**：`jose` 是以**未驗證**的 protected header 選金鑰，因此任何語法合法的 JWT 帶著任意的 `kid` 都會觸發重新抓取。gateway 在 60 秒內最多為 5 個未知 `kid` 對外抓取 JWKS，超過就直接 401（不再對外連線）；時間窗過去後恢復正常輪替。
+- 未知 `kid` 的重新抓取有**速率上限**：`jose` 是以**未驗證**的 protected header 選金鑰，因此任何語法合法的 JWT 帶著任意的 `kid` 都會觸發重新抓取。gateway 在 60 秒內最多為 5 個**抓完仍然對不上**的 `kid` 對外抓取 JWKS，超過就直接 401（不再對外連線）；時間窗過去後恢復正常輪替。抓完就解析得到的 `kid` 會**退費**，因此沒有攻擊者時 IdP 連續輪替金鑰不會被自己的防護擋下。
 - `kid` 缺漏時：JWKS 只發布**一把**可用金鑰就用它驗簽（與 legacy `keycloak-public-key` adapter 忽略 `kid` 的行為一致）；發布**多把**時無法唯一決定用哪一把驗簽，一律 401。
 - `keycloak-public-key`（legacy adapter）：GET `TOKEN_ISSUER` 的 **root URL**，解析 Keycloak 專屬的 `public_key`（base64 SPKI DER）。保留給既有 Keycloak 部署。
 - 明確選擇的路徑不可用時**不會**靜默退回另一條路徑，啟動會直接失敗並在訊息中指名 `SIGNING_KEY_SOURCE`。
@@ -228,7 +228,7 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 
 **GCP 部署的 backend 憑證**
 
-`BACKEND_TYPE=GCP` 時，轉發請求、list mode 的 FHIR List membership 查詢、以及把新建成 Patient 加回 access List 的 PATCH，都使用同一組 ADC（Application Default Credentials）access token。token 會過期，因此每次請求前重新解析。
+`BACKEND_TYPE=GCP` 時，轉發請求、list mode 的 FHIR List membership 查詢、以及把新建成 Patient 加回 access List 的 PATCH，都使用同一組 ADC（Application Default Credentials）access token。token 會過期，因此每次請求前重新解析。gateway 取不到 ADC 時（metadata server 故障、service account 不存在等）該請求以 **503** 收場，不是 401：這是 gateway 自己的故障，重新登入不可能修好。`google-auth-library` 的原始錯誤訊息可能帶著本機檔案路徑，因此只寫進 server log，對外只回固定的 `BackendCredentialError` 訊息。
 
 **SMART Scope**
 
@@ -241,6 +241,7 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 | `AuthenticationError` | 401 | Launch context 欄位缺失、scope 不足、Factory 初始化失敗 |
 | `InvalidRequestError` | 400 | 請求 body / path 無法解析 |
 | `accessDenied()` | 403 | 授權邏輯判定拒絕（不拋例外） |
+| `BackendCredentialError` | 503 | gateway 自己的 backend 憑證（ADC）無法取得 |
 
 ### 內建 Checker 一覽
 

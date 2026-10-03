@@ -3,6 +3,7 @@ import { gzip } from "node:zlib";
 
 import type { GatewayConfig } from "../configs/env.schema";
 import { AuthenticationError } from "../errors/authentication.error";
+import { BACKEND_CREDENTIAL_UNAVAILABLE_MESSAGE, BackendCredentialError } from "../errors/backend-credential.error";
 import { InvalidRequestError } from "../errors/invalid-request.error";
 import type { AccessCheckerRegistryService } from "../services/access-checker-registry.service";
 import type { AllowedQueriesCheckerService } from "../services/allowed-queries.service";
@@ -62,7 +63,11 @@ function normalizeRequestPath(relativePath: string): string {
     return relativePath.replace(/^\/+/, "").replace(/\/+$/, "");
 }
 
-function createOperationOutcome(status: number, code: "forbidden" | "login", diagnostics: string): Response {
+function createOperationOutcome(
+    status: number,
+    code: "forbidden" | "login" | "transient",
+    diagnostics: string,
+): Response {
     return Response.json(
         {
             resourceType: "OperationOutcome",
@@ -261,6 +266,12 @@ export abstract class FhirProxyController {
                             console.error(`[fhir-proxy] 400 ${method} ${requestPath}: ${error.message}`);
                             return createOperationOutcome(400, "forbidden", error.message);
                         }
+                        if (error instanceof BackendCredentialError) {
+                            // gateway 自己的 backend 憑證失效：重新登入不可能修好，因此不可回 401。
+                            // 對外只給固定訊息，原始錯誤（可能含本機檔案路徑）只留在 server log。
+                            console.error(`[fhir-proxy] 503 ${method} ${requestPath}: ${error.message}`);
+                            return createOperationOutcome(503, "transient", BACKEND_CREDENTIAL_UNAVAILABLE_MESSAGE);
+                        }
                         const diagnostics =
                             error instanceof AuthenticationError
                                 ? error.message
@@ -270,6 +281,7 @@ export abstract class FhirProxyController {
                         console.error(`[fhir-proxy] 401 ${method} ${requestPath}: ${diagnostics}`);
                         return createOperationOutcome(401, "login", diagnostics);
                     }
+
                     if (!checkerDecision.canAccess()) {
                         console.error(
                             `[fhir-proxy] 403 ${method} ${requestPath}: access checker denied (ACCESS_CHECKER=${deps.config.accessChecker})`,
