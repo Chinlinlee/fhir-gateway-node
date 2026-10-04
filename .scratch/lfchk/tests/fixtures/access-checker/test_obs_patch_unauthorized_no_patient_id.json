@@ -1,9 +1,0 @@
-[
-    {
-        "op": "replace",
-        "path": "/subject",
-        "value": {
-            "reference": "Patient/"
-        }
-    }
-]

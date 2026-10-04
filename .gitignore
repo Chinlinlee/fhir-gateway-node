@@ -161,3 +161,6 @@ dist
 .history
 .ionide
 
+# Agent scratch space（throwaway 腳本、暫存 diff、repo 複本）
+.scratch/
+
