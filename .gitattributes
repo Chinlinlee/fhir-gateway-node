@@ -1,0 +1,39 @@
+# 文字檔一律以 LF 存入 git，並在 checkout 時保持 LF。
+#
+# 為什麼需要這個檔案：本 repo 在 Windows 上開發。若 `core.autocrlf=true`，
+# git 會把工作區 checkout 成 CRLF，但 blob 仍是 LF。Biome 要求 LF，於是它對
+# 工作區裡幾乎每個檔案都報 format error——包含從未被修改過的檔案。那是環境
+# 噪音而非程式碼缺陷，但足以讓 lint 結論變得不可信。
+#
+# 宣告 eol=lf 之後，工作區與 blob 一致，Biome 的結論才有意義。
+#
+# 注意：宣告本檔後需執行一次 `git add --renormalize .`，
+# 才會把既有 blob 的 CRLF 轉成 LF。
+
+* text=auto eol=lf
+
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.cjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.sql text eol=lf
+*.txt text eol=lf
+*.example text eol=lf
+
+# 二進位檔不可做 EOL 轉換
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.jar binary
+*.zip binary
+*.gz binary
