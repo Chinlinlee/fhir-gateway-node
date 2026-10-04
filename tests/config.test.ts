@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, expect, it } from "vitest";
 import { ConfigError, loadGatewayConfig, minimalValidEnv } from "../src/configs";
 
 describe("loadGatewayConfig", () => {
@@ -73,21 +73,17 @@ describe("loadGatewayConfig", () => {
     });
 
     it("parses ALLOW_TOKEN_ISSUER_HOST_MISMATCH", () => {
-        const enabled = loadGatewayConfig(
-            minimalValidEnv({ ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "true" }),
-        );
+        const enabled = loadGatewayConfig(minimalValidEnv({ ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "true" }));
         expect(enabled.allowTokenIssuerHostMismatch).toBe(true);
 
-        const disabled = loadGatewayConfig(
-            minimalValidEnv({ ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "off" }),
-        );
+        const disabled = loadGatewayConfig(minimalValidEnv({ ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "off" }));
         expect(disabled.allowTokenIssuerHostMismatch).toBe(false);
     });
 
     it("throws on invalid ALLOW_TOKEN_ISSUER_HOST_MISMATCH", () => {
-        expect(() =>
-            loadGatewayConfig(minimalValidEnv({ ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "maybe" })),
-        ).toThrow(/ALLOW_TOKEN_ISSUER_HOST_MISMATCH/);
+        expect(() => loadGatewayConfig(minimalValidEnv({ ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "maybe" }))).toThrow(
+            /ALLOW_TOKEN_ISSUER_HOST_MISMATCH/,
+        );
     });
 
     it("reads WELL_KNOWN_ENDPOINT from environment", () => {

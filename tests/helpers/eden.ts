@@ -1,6 +1,6 @@
 import { treaty } from "@elysiajs/eden";
 
-import { createApp, type App } from "../../src/app";
+import { type App, createApp } from "../../src/app";
 
 export type TestClient = ReturnType<typeof treaty<App>>;
 

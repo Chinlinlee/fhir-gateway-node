@@ -21,10 +21,7 @@ const KeycloakIssuerMetadataSchema = z.object({
 export class KeycloakPublicKeySigningKeyResolver implements SigningKeyResolver {
     private constructor(private readonly publicKey: KeyObject) {}
 
-    static async create(
-        tokenIssuer: string,
-        httpUtil: HttpUtil,
-    ): Promise<KeycloakPublicKeySigningKeyResolver> {
+    static async create(tokenIssuer: string, httpUtil: HttpUtil): Promise<KeycloakPublicKeySigningKeyResolver> {
         const body = await httpUtil.getTextWithStartupRetry(tokenIssuer, ENV_KEYS.TOKEN_ISSUER);
 
         let json: unknown;
