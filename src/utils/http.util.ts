@@ -7,6 +7,12 @@ import { retryWithDelays, startupFetchMaxAttempts } from "./retry.util";
 
 export type HttpFetchFn = typeof undiciFetch;
 
+/** 表單 POST 的結果；狀態碼與 body 原文都交給呼叫端判斷。 */
+export type HttpFormResponse = {
+    status: number;
+    body: string;
+};
+
 export class HttpUtil {
     constructor(private readonly fetchFn: HttpFetchFn = undiciFetch) {}
 
@@ -25,6 +31,32 @@ export class HttpUtil {
         }
 
         return response.text();
+    }
+
+    /**
+     * 以 `application/x-www-form-urlencoded` POST 出去，並回傳狀態碼與 body 原文。
+     *
+     * 刻意不像 `getText` 那樣對非 2xx 拋錯：OAuth 的錯誤本來就在 body 裡（`invalid_grant`
+     * 搭配 400），呼叫端要自己決定怎麼對外回應。
+     */
+    async postForm(
+        url: string,
+        form: Record<string, string>,
+        options?: { timeoutMs?: number },
+    ): Promise<HttpFormResponse> {
+        const response = await this.fetchFn(url, {
+            method: "POST",
+            ...HTTP_NO_CACHE_FETCH_OPTIONS,
+            headers: {
+                ...HTTP_NO_CACHE_HEADERS,
+                "Accept-Charset": "utf-8",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: new URLSearchParams(form).toString(),
+            ...(options?.timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(options.timeoutMs) }),
+        });
+
+        return { status: response.status, body: await response.text() };
     }
 
     /**

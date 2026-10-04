@@ -32,6 +32,19 @@ export const ENV_KEYS = {
      * Lifetime of an unbound launch context, in seconds.
      */
     LAUNCH_CONTEXT_TTL_SECONDS: "LAUNCH_CONTEXT_TTL_SECONDS",
+    /**
+     * gateway 對外可被 App 呼叫的 base URL；`authorize` 轉發與 SMART configuration 的端點
+     * 改寫都以它為準，絕不從請求的 `Host` header 推導。設定它等同啟用代理的授權流程。
+     * Authoritative public base URL used for endpoint rewriting; never derived from `Host`.
+     */
+    GATEWAY_PUBLIC_BASE_URL: "GATEWAY_PUBLIC_BASE_URL",
+    /**
+     * gateway 自己拿來當 IdP client 的 client id。gateway 不簽任何 token，這組憑證只用來
+     * 在 callback 時向 IdP 的 token endpoint 換 token（ADR-0001：簽發權留在 IdP）。
+     */
+    GATEWAY_CLIENT_ID: "GATEWAY_CLIENT_ID",
+    /** 對應的 client secret；啟用授權流程而未設定時啟動即失敗。 */
+    GATEWAY_CLIENT_SECRET: "GATEWAY_CLIENT_SECRET",
 } as const;
 
 export const DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH = false;

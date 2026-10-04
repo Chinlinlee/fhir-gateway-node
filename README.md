@@ -307,6 +307,9 @@ cp env.example .env
 - `INTERNAL_LAUNCH_API_ENABLED`：`true` 時啟用 EHR 面向的內部 launch context 端點（預設 `false`）。見 [內部 Launch Context 端點](#內部-launch-context-端點)
 - `INTERNAL_LAUNCH_API_CREDENTIAL`：內部端點的認證憑證。`INTERNAL_LAUNCH_API_ENABLED=true` 而未設定時，gateway **啟動即失敗**並指名這個變數
 - `LAUNCH_CONTEXT_TTL_SECONDS`：未綁定 launch context 的存活秒數（預設 `600`）
+- `GATEWAY_PUBLIC_BASE_URL`：gateway 對外可被 SMART App 呼叫的 base URL。設定它等同啟用代理的 SMART authorization flow（留空 = 不代理，維持被動）。見 [SMART Authorization Flow 代理](#smart-authorization-flow-代理)
+- `GATEWAY_CLIENT_ID`：gateway 自己當 IdP client 的 client id。設定 `GATEWAY_PUBLIC_BASE_URL` 而缺任一項時，gateway **啟動即失敗**並指名該變數
+- `GATEWAY_CLIENT_SECRET`：對應的 client secret
 
 ## 內部 Launch Context 端點
 
@@ -372,6 +375,88 @@ launch context 存放在一個窄介面（`LaunchContextStore`，`src/types/laun
 
 **本票不改變任何授權裁決**：launch context 的內容仍然由 access token 的 `patient` claim 提供，
 既有請求的結果與本票之前完全一致。
+
+## SMART Authorization Flow 代理
+
+設定 `GATEWAY_PUBLIC_BASE_URL` 之後，gateway 會對外代理 SMART 的 authorization endpoint 與
+token endpoint：一份**未修改的標準 SMART App**（authorization code + PKCE）就能對 gateway
+完成一次完整 launch，App 端不需要任何特別設定。理由見
+`docs/adr/0002-launch-context-owned-by-gateway.md`：launch id 與 `sub` 第一次同時在手，是使用者
+在 IdP 完成認證的那一瞬間，那一瞬間發生在 gateway 不在場的地方，因此 gateway 必須進到流程裡。
+
+### 為什麼 gateway 需要自己的 IdP client 憑證
+
+因為實際的 code exchange 是 **gateway** 做的：`authorize` 轉發給 IdP 時用的是 gateway 自己的
+`client_id`／`client_secret`，callback 帶回來的 code 也是換成這組憑證。App 的 `code_verifier`
+不會、也不該送到 IdP——PKCE 由 gateway 在自己的 token endpoint 驗（只接受 S256）。
+
+**gateway 不持有簽發權。** 這組憑證只證明「是 gateway 在問 IdP 要 token」，access token 仍由
+IdP 簽發、`iss` 仍是 IdP、簽章金鑰也仍在 IdP（ADR-0001）。App 既有的 token 驗證與 refresh
+邏輯不必改寫。
+
+在 IdP 上需要先註冊好這個 confidential client，並把 gateway 的 callback 登錄為 redirect URI：
+
+```
+https://<GATEWAY_PUBLIC_BASE_URL>/smart/callback
+```
+
+### 啟用
+
+```bash
+GATEWAY_PUBLIC_BASE_URL=https://gateway.example.org
+GATEWAY_CLIENT_ID=<gateway 在 IdP 上的 client id>
+GATEWAY_CLIENT_SECRET=<gateway 在 IdP 上的 client secret>
+```
+
+`GATEWAY_PUBLIC_BASE_URL` 有設定而缺任一項憑證時，gateway **啟動即失敗**並指名該變數：這條流程
+在第一個使用者登入時就會用到憑證，讓它晚一點才爆沒有好處。留空 `GATEWAY_PUBLIC_BASE_URL` 則
+完全不代理，SMART configuration 原樣代理 IdP 的文件，既有部署的行為不變。
+
+### gateway 對外宣告什麼
+
+`GET /fhir/.well-known/smart-configuration` 仍然回傳 IdP 的 discovery 文件，但有兩個欄位改指
+gateway 自己：
+
+| 欄位 | 值 |
+| --- | --- |
+| `issuer` | **維持 IdP 的原值不變** |
+| `authorization_endpoint` | `${GATEWAY_PUBLIC_BASE_URL}/smart/authorize` |
+| `token_endpoint` | `${GATEWAY_PUBLIC_BASE_URL}/smart/token` |
+
+改寫一律用設定的 `GATEWAY_PUBLIC_BASE_URL`，**絕不從請求的 `Host` header 推導**——那個 header
+由呼叫端控制，拿它組端點等於讓任何人都能把 SMART App 的 code exchange 導到自己的主機。
+
+### 流程
+
+1. `GET /smart/authorize`：`launch` 必須是一個存在且**尚未綁定**的 launch id，否則回 `400`
+   （不轉發出去讓 IdP 去困惑）；`code_challenge_method` 只接受 `S256`。通過之後連同 `state`、
+   `scope`、`aud`、`nonce`、`launch` 轉發給 IdP 的 authorization endpoint，但 `redirect_uri`
+   被改寫成 gateway 自己的 callback（帶一個 gateway 產生的 correlation id）。App 的
+   `code_challenge` 留在 gateway 手裡不往下傳——gateway 對 IdP 那一腿自建一組 PKCE。
+2. `GET /smart/callback`：比對 `state` 與發起 `authorize` 時記下的值（不符就拒絕綁定），
+   用 gateway 的 client 憑證把 code 換成 IdP token。**這一刻 `launch id` 與 `sub` 同時在手，
+   就是綁定點**：寫入 `(subject, client id)` 的綁定記錄後，gateway 發出自己的一次性 opaque code，
+   302 回 App 原本的 `redirect_uri`，`state` 原樣帶回。
+3. `POST /smart/token`：`authorization_code` 與 `refresh_token` 兩種 grant 都走這裡。驗證 code
+   未使用過、PKCE 相符（`redirect_uri`／`client_id` 帶了上來也會核對），通過後回傳**存著的
+   IdP access token 與 refresh token**。
+
+### 邊界
+
+- **gateway 不簽任何 token。** 交給 App 的 code 是不透明 handle，不是 JWT，不含任何身分或病人資訊。
+  launch id 與 gateway code 皆單次可用，任一者被重放時請求被拒絕。
+- 支援 authorization code flow 與 refresh；不支援 implicit flow。
+- `SMART` 的 `revocation_endpoint` 與 introspection 維持 IdP 的，gateway 不擴張到 token 撤銷語意。
+- **本票不改變任何授權裁決**：launch context 的內容仍然由 access token 的 claim 提供，既有測試
+  不經修改通過。改變 context 來源是後續票的事。
+
+### 端點一覽
+
+| 方法 | 路徑 | 說明 |
+| --- | --- | --- |
+| `GET` | `/smart/authorize` | 對外宣告的 authorization endpoint；驗 launch id 後轉發給 IdP |
+| `GET` | `/smart/callback` | gateway 自己的 callback；綁定點發生在這裡 |
+| `POST` | `/smart/token` | 對外宣告的 token endpoint；code exchange 與 refresh |
 
 ## Allowed Queries 設定檔
 

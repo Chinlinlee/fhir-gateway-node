@@ -152,6 +152,40 @@ function parseInternalLaunchApiCredential(raw: string | undefined, enabled: bool
     return credential;
 }
 
+/**
+ * gateway 作為 client 存取 IdP token endpoint 的憑證。設定 `GATEWAY_PUBLIC_BASE_URL` 就等同
+ * 啟用代理的授權流程，而這條流程在 callback 時一定要拿 client 憑證去換 token——缺憑證的
+ * 部署只會在第一個使用者登入時才炸。啟動即失敗並指名環境變數。
+ *
+ * gateway 仍然不簽任何 token：這組憑證只證明「是 gateway 在問 IdP 要 token」，
+ * 簽發權與 access token 都在 IdP 手上（ADR-0001）。
+ */
+function parseGatewayIdpClientCredentials(
+    clientIdRaw: string | undefined,
+    clientSecretRaw: string | undefined,
+    publicBaseUrl: string | undefined,
+): { gatewayClientId?: string; gatewayClientSecret?: string } {
+    if (publicBaseUrl === undefined) {
+        return {};
+    }
+
+    const clientId = clientIdRaw?.trim();
+    if (clientId === undefined || clientId.length === 0) {
+        throw new ConfigError(
+            `The environment variable ${ENV_KEYS.GATEWAY_CLIENT_ID} must be set when ${ENV_KEYS.GATEWAY_PUBLIC_BASE_URL} is configured!`,
+        );
+    }
+
+    const clientSecret = clientSecretRaw?.trim();
+    if (clientSecret === undefined || clientSecret.length === 0) {
+        throw new ConfigError(
+            `The environment variable ${ENV_KEYS.GATEWAY_CLIENT_SECRET} must be set when ${ENV_KEYS.GATEWAY_PUBLIC_BASE_URL} is configured!`,
+        );
+    }
+
+    return { gatewayClientId: clientId, gatewayClientSecret: clientSecret };
+}
+
 function validateAccessChecker(accessChecker: string, runMode: RunMode): void {
     if (accessChecker === "permissive" && runMode !== "DEV") {
         // 僅開發模式允許
@@ -206,6 +240,14 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
 
     const launchContextTtlSeconds = parseLaunchContextTtlSeconds(env[ENV_KEYS.LAUNCH_CONTEXT_TTL_SECONDS]);
 
+    // 端點改寫絕不從請求的 Host 推導：operator 設定的 base URL 是唯一權威來源。
+    const gatewayPublicBaseUrl = env[ENV_KEYS.GATEWAY_PUBLIC_BASE_URL]?.trim();
+    const { gatewayClientId, gatewayClientSecret } = parseGatewayIdpClientCredentials(
+        env[ENV_KEYS.GATEWAY_CLIENT_ID],
+        env[ENV_KEYS.GATEWAY_CLIENT_SECRET],
+        gatewayPublicBaseUrl === undefined || gatewayPublicBaseUrl.length === 0 ? undefined : gatewayPublicBaseUrl,
+    );
+
     const portRaw = env[ENV_KEYS.PORT]?.trim();
     const port = portRaw ? Number.parseInt(portRaw, 10) : DEFAULT_PORT;
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -228,6 +270,8 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
         ...(internalLaunchApiCredential ? { internalLaunchApiCredential } : {}),
         internalLaunchApiEnabled,
         launchContextTtlSeconds,
+        ...(gatewayPublicBaseUrl ? { gatewayPublicBaseUrl } : {}),
+        ...(gatewayClientId && gatewayClientSecret ? { gatewayClientId, gatewayClientSecret } : {}),
     };
 
     const result = GatewayConfigSchema.safeParse(candidate);

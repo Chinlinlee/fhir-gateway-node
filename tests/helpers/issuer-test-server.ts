@@ -1,5 +1,6 @@
+import { createHash, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { createServer, type Server } from "node:http";
+import { createServer, type Server, type ServerResponse } from "node:http";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -12,6 +13,12 @@ export const TEST_JWKS_PATH = "/protocol/openid-connect/certs";
 
 /** stub IdP JWKS 中金鑰的 kid */
 export const TEST_JWK_KID = "test-signing-key";
+
+/** stub IdP 提供 authorization endpoint 的路徑（對齊 Keycloak 的 /protocol/openid-connect/auth） */
+export const TEST_AUTHORIZATION_PATH = "/protocol/openid-connect/auth";
+
+/** stub IdP 提供 token endpoint 的路徑（對齊 Keycloak 的 /protocol/openid-connect/token） */
+export const TEST_TOKEN_PATH = "/protocol/openid-connect/token";
 
 export type IssuerTestKeys = {
     publicKey: CryptoKey;
@@ -32,6 +39,26 @@ export type IssuerTestServerOptions = {
      * 測試多金鑰時 token 只能帶 kid 或完全沒有 kid 兩種形狀。
      */
     jwksKeyCount?: number;
+    /**
+     * 是否提供 authorization endpoint 與 token endpoint（預設 false）。開啟時 discovery 的
+     * `authorization_endpoint`／`token_endpoint` 也改指本機 stub，讓 gateway 轉發得到終點。
+     */
+    serveAuthorizationFlow?: boolean;
+    /** serveAuthorizationFlow 時 IdP 認得的 client id（gateway 拿它當 client 去換 token） */
+    clientId?: string;
+    /** serveAuthorizationFlow 時 IdP 認得的 client secret */
+    clientSecret?: string;
+    /** IdP 發出的 access token 的 `sub`（預設 `gateway-user`） */
+    subject?: string;
+};
+
+/** IdP 記下的一張 authorization code；只能在同一組 code_challenge 下換一次 token。 */
+type IssuedTestCode = {
+    codeChallenge: string;
+    redirectUri: string;
+    clientId: string;
+    scope: string;
+    subject: string;
 };
 
 /** JWKS 端點的可用性；unreachable 用來模擬輪替期間 IdP 連不上 */
@@ -44,6 +71,19 @@ export type IssuerTestRequests = {
     wellKnown: number;
     /** GET JWKS 次數 */
     jwks: number;
+    /** GET authorization endpoint 次數 */
+    authorize: number;
+    /** POST token endpoint 次數 */
+    token: number;
+};
+
+/**
+ * stub IdP 收到的請求參數。`authorize` 是最近一次 authorization 請求的 query，`token` 是
+ * 最近一次 token 請求的 form body——gateway 轉發與 code exchange 的內容都落在這裡。
+ */
+export type IssuerTestObservations = {
+    authorize: Record<string, string> | undefined;
+    token: Record<string, string> | undefined;
 };
 
 export type IssuerTestServer = {
@@ -54,6 +94,8 @@ export type IssuerTestServer = {
     keys: IssuerTestKeys & { kid: string };
     jwksPath: string;
     requests: IssuerTestRequests;
+    /** IdP 端實際收到的請求參數：gateway 轉發出去的內容就在這裡 */
+    observations: IssuerTestObservations;
     /** 輪替簽章金鑰：改發新的 kid 與金鑰，並回傳新的金鑰組 */
     rotateSigningKey: () => Promise<IssuerTestKeys & { kid: string }>;
     /** 設定 JWKS 端點是否可連線，用來模擬輪替期間 IdP 不可用 */
@@ -83,7 +125,16 @@ export async function startIssuerTestServer(
     wellKnownPath = "test",
     options: IssuerTestServerOptions = {},
 ): Promise<IssuerTestServer> {
-    const { servePublicKey = true, serveJwks = false, publishJwksUri = true, jwksKeyCount = 1 } = options;
+    const {
+        servePublicKey = true,
+        serveJwks = false,
+        publishJwksUri = true,
+        jwksKeyCount = 1,
+        serveAuthorizationFlow = false,
+        clientId = "test-idp-client",
+        clientSecret = "test-idp-client-secret",
+        subject = "gateway-user",
+    } = options;
     const { publicKey, privateKey } = await generateKeyPair("RS256", {
         extractable: true,
     });
@@ -94,8 +145,11 @@ export async function startIssuerTestServer(
     const discoveryFixture = JSON.parse(readFileSync(join(fixturesDir, "idp_keycloak_config.json"), "utf8"));
 
     let issuerUrl = "";
-    const requests: IssuerTestRequests = { root: 0, wellKnown: 0, jwks: 0 };
+    const requests: IssuerTestRequests = { root: 0, wellKnown: 0, jwks: 0, authorize: 0, token: 0 };
     let rotationCount = 0;
+    const issuedCodes = new Map<string, IssuedTestCode>();
+    const issuedRefreshTokens = new Map<string, IssuedTestCode>();
+    const observations: IssuerTestObservations = { authorize: undefined, token: undefined };
 
     /** 輪替簽章金鑰：JWKS 與 root public_key 同時改發新的 kid 與金鑰 */
     const rotateSigningKey = async (): Promise<IssuerTestKeys & { kid: string }> => {
@@ -119,7 +173,135 @@ export async function startIssuerTestServer(
         } else {
             delete discovery.jwks_uri;
         }
+        withAuthorizationEndpoints(discovery);
         return JSON.stringify(discovery, null, 4);
+    };
+
+    /**
+     * serveAuthorizationFlow 時 discovery 的 authorization／token endpoint 改指本機 stub，
+     * 讓 gateway 轉發的 `authorize` 與 code exchange 真的抵達這個 IdP。
+     */
+    const withAuthorizationEndpoints = (discovery: Record<string, unknown>): void => {
+        if (!serveAuthorizationFlow) {
+            return;
+        }
+        discovery.authorization_endpoint = `${issuerUrl}${TEST_AUTHORIZATION_PATH}`;
+        discovery.token_endpoint = `${issuerUrl}${TEST_TOKEN_PATH}`;
+    };
+
+    const signAccessToken = async (code: IssuedTestCode): Promise<string> =>
+        new SignJWT({ azp: code.clientId, scope: code.scope, typ: "Bearer" })
+            .setProtectedHeader({ alg: "RS256", kid: jwk["kid"] as string })
+            .setIssuer(issuerUrl)
+            .setSubject(code.subject)
+            .sign(privateKey);
+
+    /**
+     * 標準 authorization endpoint：記下 PKCE challenge，發一張單次 code，302 回 redirect_uri。
+     * 使用者在 IdP 認證完成的那一刻，gateway 只拿到 `code` 與 `state`。
+     */
+    const handleAuthorization = (url: URL, res: ServerResponse): void => {
+        const params = Object.fromEntries(url.searchParams);
+        observations.authorize = params;
+        const redirectUri = params["redirect_uri"];
+        const codeChallenge = params["code_challenge"];
+        const state = params["state"];
+
+        if (params["client_id"] !== clientId || !redirectUri || !codeChallenge) {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "invalid_request" }));
+            return;
+        }
+
+        const code = randomBytes(24).toString("base64url");
+        issuedCodes.set(code, {
+            codeChallenge,
+            redirectUri,
+            clientId,
+            scope: params["scope"] ?? "",
+            subject,
+        });
+
+        const location = new URL(redirectUri);
+        location.searchParams.set("code", code);
+        if (state !== undefined) {
+            location.searchParams.set("state", state);
+        }
+        location.searchParams.set("session_state", "stub-session");
+        res.writeHead(302, { Location: location.toString() }).end();
+    };
+
+    /** 標準 token endpoint：authorization_code 與 refresh_token 兩種 grant。 */
+    const handleToken = async (body: string, res: ServerResponse): Promise<void> => {
+        const form = Object.fromEntries(new URLSearchParams(body));
+        observations.token = form;
+
+        const invalidGrant = (): void => {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "invalid_grant" }));
+        };
+
+        if (form["client_id"] !== clientId || form["client_secret"] !== clientSecret) {
+            invalidGrant();
+            return;
+        }
+
+        if (form["grant_type"] === "authorization_code") {
+            const presentedCode = form["code"] ?? "";
+            const code = issuedCodes.get(presentedCode);
+            if (
+                code === undefined ||
+                code.redirectUri !== form["redirect_uri"] ||
+                code.codeChallenge !==
+                    createHash("sha256")
+                        .update(form["code_verifier"] ?? "")
+                        .digest("base64url")
+            ) {
+                invalidGrant();
+                return;
+            }
+            // 單次使用：換過就作廢。
+            issuedCodes.delete(presentedCode);
+            const refreshToken = randomBytes(24).toString("base64url");
+            issuedRefreshTokens.set(refreshToken, code);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+                JSON.stringify({
+                    access_token: await signAccessToken(code),
+                    refresh_token: refreshToken,
+                    token_type: "Bearer",
+                    expires_in: 300,
+                    scope: code.scope,
+                }),
+            );
+            return;
+        }
+
+        if (form["grant_type"] === "refresh_token") {
+            const presentedRefreshToken = form["refresh_token"] ?? "";
+            const granted = issuedRefreshTokens.get(presentedRefreshToken);
+            if (granted === undefined) {
+                invalidGrant();
+                return;
+            }
+            const refreshToken = randomBytes(24).toString("base64url");
+            issuedRefreshTokens.delete(presentedRefreshToken);
+            issuedRefreshTokens.set(refreshToken, granted);
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(
+                JSON.stringify({
+                    access_token: await signAccessToken(granted),
+                    refresh_token: refreshToken,
+                    token_type: "Bearer",
+                    expires_in: 300,
+                    scope: granted.scope,
+                }),
+            );
+            return;
+        }
+
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "unsupported_grant_type" }));
     };
 
     const server: Server = createServer((req, res) => {
@@ -160,6 +342,24 @@ export async function startIssuerTestServer(
             return;
         }
 
+        if (serveAuthorizationFlow && req.method === "GET" && path === TEST_AUTHORIZATION_PATH) {
+            requests.authorize += 1;
+            handleAuthorization(new URL(req.url, issuerUrl), res);
+            return;
+        }
+
+        if (serveAuthorizationFlow && req.method === "POST" && path === TEST_TOKEN_PATH) {
+            requests.token += 1;
+            let body = "";
+            req.on("data", (chunk: Buffer) => {
+                body += chunk.toString("utf8");
+            });
+            req.on("end", () => {
+                void handleToken(body, res);
+            });
+            return;
+        }
+
         res.writeHead(404).end();
     });
 
@@ -180,6 +380,7 @@ export async function startIssuerTestServer(
         wellKnownConfig: buildDiscoveryDocument(),
         jwksPath: TEST_JWKS_PATH,
         requests,
+        observations,
         rotateSigningKey,
         setJwksAvailability: (availability: JwksAvailability) => {
             jwksAvailability = availability;

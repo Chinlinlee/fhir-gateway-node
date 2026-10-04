@@ -5,12 +5,16 @@
  * gateway 生成 opaque 的 launch id 交給 EHR；使用者完成認證的那一刻（authorization flow 的
  * callback）才把 launch id 綁到 `(subject, client id)`，之後每一次 FHIR 存取都依這組鍵回讀。
  *
- * 介面刻意維持四個職責：建立未綁定、綁定到 `(subject, client id)`、依該鍵回讀、刪除。
+ * 介面刻意維持窄：建立未綁定、依 launch id 查可用性、綁定到 `(subject, client id)`、
+ * 依該鍵回讀、刪除。
  * 索引鍵選 `(subject, client id)` 是因為三家 IdP 都保證的只有 `sub` 加 `azp`／`client_id`
  * （ADR-0002:19）。
  *
- * Narrow store seam: create an unbound context, bind it to `(subject, client id)`,
- * read it back by that key, delete it. Nothing else belongs here.
+ * `authorize` 在轉發給 IdP 之前必須先確認 launch id 真的存在且還沒被綁走，因此介面需要
+ * 依 launch id 查一次；這與 `bind` 是兩件事：查詢不改變任何狀態。
+ *
+ * Narrow store seam: create an unbound context, look it up by launch id, bind it to
+ * `(subject, client id)`, read it back by that key, delete it. Nothing else belongs here.
  */
 export type LaunchContextStore = {
     /**
@@ -19,6 +23,13 @@ export type LaunchContextStore = {
      */
     create: (input: CreateLaunchContextInput) => Promise<CreatedLaunchContext>;
 
+    /**
+     * 這個 launch id 現在能不能拿來授權：存在、尚未被綁定、且未過期。
+     *
+     * 這是唯讀的檢查，`authorize` 在轉發之前用它擋掉未知或已用過的 launch id——
+     * 擋掉之後 IdP 完全不知道這次 launch 的存在，也不會去困惑。
+     */
+    isAvailable: (launchId: string) => Promise<boolean>;
     /**
      * 把 launch id 綁到 `(subject, client id)`。已綁定的 launch id 不可重複綁定，
      * 既有綁定不會被覆寫。
