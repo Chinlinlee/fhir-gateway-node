@@ -1,7 +1,7 @@
-import { createHash, timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { INTERNAL_LAUNCH_API_PREFIX, LAUNCH_CONTEXTS_PATH } from "../../constants/routes";
 import type { LaunchContextStore } from "../../types/launch-context-store";
+import { constantTimeEquals } from "../../utils/constant-time.util";
 
 /** 認證用的 request header；刻意不用 `Authorization`，讓 EHR 服務帳號與臨床使用者的 bearer token 不會混在一起。 */
 export const INTERNAL_CREDENTIAL_HEADER = "x-internal-credential";
@@ -32,16 +32,6 @@ function logOutcome(status: number): void {
     console.log(`[internal-launch] ${status} POST ${INTERNAL_LAUNCH_API_PREFIX}${LAUNCH_CONTEXTS_PATH}`);
 }
 
-/**
- * 定長比較兩個憑證：先雜湊再 `timingSafeEqual`，讓比較的時間不洩漏共同前綴長度。
- * Constant-time credential comparison; hashing first keeps both operands the same length.
- */
-function credentialMatches(presented: string, expected: string): boolean {
-    const presentedDigest = createHash("sha256").update(presented).digest();
-    const expectedDigest = createHash("sha256").update(expected).digest();
-    return timingSafeEqual(presentedDigest, expectedDigest);
-}
-
 export abstract class InternalLaunchController {
     /**
      * EHR 在「從某位病人的頁面開啟 SMART App」之前呼叫這裡，取得一份尚未綁定到任何使用者的
@@ -54,7 +44,7 @@ export abstract class InternalLaunchController {
      */
     static async register(request: Request, deps: InternalLaunchDeps): Promise<Response> {
         const credential = request.headers.get(INTERNAL_CREDENTIAL_HEADER);
-        if (credential === null || !credentialMatches(credential, deps.credential)) {
+        if (credential === null || !constantTimeEquals(credential, deps.credential)) {
             // 不記錄嘗試用的憑證本身。
             logOutcome(401);
             return jsonError(401, "Invalid internal launch API credential");

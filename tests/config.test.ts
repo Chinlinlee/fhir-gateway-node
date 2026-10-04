@@ -113,4 +113,40 @@ describe("loadGatewayConfig", () => {
             /SIGNING_KEY_SOURCE/,
         );
     });
+
+    it("leaves the proxied authorization flow off when GATEWAY_PUBLIC_BASE_URL is unset", () => {
+        const config = loadGatewayConfig(minimalValidEnv());
+
+        expect(config.gatewayPublicBaseUrl).toBeUndefined();
+        expect(config.gatewayClientId).toBeUndefined();
+    });
+
+    it("reads the gateway public base URL and IdP client credentials", () => {
+        const config = loadGatewayConfig(
+            minimalValidEnv({
+                GATEWAY_PUBLIC_BASE_URL: "https://gateway.example.org",
+                GATEWAY_CLIENT_ID: "gateway",
+                GATEWAY_CLIENT_SECRET: "shhh",
+            }),
+        );
+
+        expect(config.gatewayPublicBaseUrl).toBe("https://gateway.example.org");
+        expect(config.gatewayClientId).toBe("gateway");
+        expect(config.gatewayClientSecret).toBe("shhh");
+    });
+
+    it("throws naming the missing credential when the authorization flow is enabled without one", () => {
+        expect(() =>
+            loadGatewayConfig(minimalValidEnv({ GATEWAY_PUBLIC_BASE_URL: "https://gateway.example.org" })),
+        ).toThrow(/GATEWAY_CLIENT_ID/);
+
+        expect(() =>
+            loadGatewayConfig(
+                minimalValidEnv({
+                    GATEWAY_PUBLIC_BASE_URL: "https://gateway.example.org",
+                    GATEWAY_CLIENT_ID: "gateway",
+                }),
+            ),
+        ).toThrow(/GATEWAY_CLIENT_SECRET/);
+    });
 });

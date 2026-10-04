@@ -62,6 +62,11 @@ export class InMemoryLaunchContextStore implements LaunchContextStore {
         return { launchId, expiresAt };
     }
 
+    async isAvailable(launchId: string): Promise<boolean> {
+        const record = this.unbound.get(launchId);
+        return record !== undefined && record.expiresAt > this.now();
+    }
+
     async bind(launchId: string, subject: string, clientId: string): Promise<BoundLaunchContext | undefined> {
         const record = this.unbound.get(launchId);
         // 未知 id、已過期的 id、以及已被綁定的 id，對呼叫端都是同一件事：綁不上。
