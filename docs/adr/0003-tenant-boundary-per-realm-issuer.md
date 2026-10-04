@@ -28,6 +28,8 @@
 ## Consequences
 
 - **spec #1 的 ticket #5（抽出 issuer-matching policy）從 refactor 升級為安全邊界。** 那條 realm-pathname 規則不是待移除的技術債，它是 tenant 隔離的第一道防線；它需要的是測試，不是刪除。
+- **`aud` 校驗的交付方式是 opt-in（`TOKEN_AUDIENCE`）。** RFC 9068 §4 是 MUST，但同一時間要求「已接受 token 的授權結果不得改變」的升級約束（issue #10 constraint 1）排除了「預設開啟」：既有部署的 IdP 未配 audience mapper 時，預設開啟會讓全部請求 401。因此 gateway 在 `TOKEN_AUDIENCE` 有值時才校驗，未設定時於 PROD 啟動印出警告。**MUST 尚未在預設狀態生效**——這一點不可被當成已完成的隔離能力。
+  - Keycloak 需 audience protocol mapper 才能讓這個設定有意義；在 mapper 到位前，`aud` 這層防線實際上不存在，tenant 邊界仍完全靠 issuer。
 - `aud` 校驗需要 IdP 能產出 per-tenant 的 `aud`。Logto 與 Casdoor 原生支援 RFC 8707 `resource`；Keycloak 需用 audience protocol mapper（原生 RFC 8707 仍是 open issue #14355），同一 client 多 `aud` 要靠 optional client scope 切換。**這是 IdP 選型的硬條件。**
 - SMART 規格本身沒有描述「一個 AS 同時服務多個 EHR」的拓樸（心智模型是 1 AS : 1 EHR）。共用 IdP 時的 per-tenant `aud` 與 per-tenant client 綁定要自己解。
 - 第三方 SMART App 開發商仍須為每家醫院註冊一次 client——SMART 2.2 明文這是規格預設（"the app must be registered with that EHR's authorization service"）。這是 trade-off，不是缺陷。

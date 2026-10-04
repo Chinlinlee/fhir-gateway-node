@@ -31,7 +31,7 @@ gateway 取得簽章金鑰並驗證 token 的途徑。標準途徑是 OIDC disco
 _Avoid_: key source、verification mode
 
 **Tenant boundary**:
-一家醫院與另一家醫院之間的隔離。以 **per-realm issuer** 為主（不同 realm 發出的 token 簽章即不相容），以 **`aud` 校驗**為縱深防禦。
+一家醫院與另一家醫院之間的隔離。以 **per-realm issuer** 為主（不同 realm 發出的 token 簽章即不相容），以 **`aud` 校驗**為縱深防禦——後者需設定 `TOKEN_AUDIENCE` 才生效（見 ADR-0003）。
 _Avoid_: multi-tenancy、hospital isolation（皆指稱部署而非邊界機制）
 
 **Audience（`aud`）**:

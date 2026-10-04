@@ -41,6 +41,26 @@ gateway 啟動時只抓一次 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 的 OIDC di
 
 三個策略都不接受時回 401。策略只透過 `IssuerPolicy` 介面使用，其他呼叫端無法繞過 policy 單獨套用。
 
+### Audience 校驗（`TOKEN_AUDIENCE`）
+
+「這個資源伺服器回答哪些 `aud` 值」由 `TOKEN_AUDIENCE` 宣告，決策點在 `src/services/audience-policy/audience-policy.ts`，並在 jwtVerify 的 `audience` 選項生效：
+
+- **未設定或留空 → 完全不校驗 `aud`**，與加入本檢查前的行為完全相同，既有部署升級不會改變任何請求的結果。
+- **token 的 `aud` 以集合比對**：`aud` 可以是單一字串或字串陣列，陣列任一值命中即接受。
+- **token 沒有 `aud` claim 時拒絕（401）**，前提是 `TOKEN_AUDIENCE` 有設定。
+- **拒絕訊息只描述失敗類別**（如 `unexpected "aud" claim value`），不會洩漏本 gateway 接受哪些 `aud` 值。
+- `aud` 校驗**不放寬也不收窄 scope**：授權裁決仍由 scope 與 launch context 決定。
+
+依 SMART App Launch 2.2，`aud` 應為「EHR resource server 的 URL」，對本 gateway 而言是 **gateway 自己的公開 FHIR base URL（含 `/fhir` 前綴）**，不是後端 HAPI 的位址：
+
+```bash
+TOKEN_AUDIENCE=https://gateway.example.com/fhir
+```
+
+IdP 必須配得出這個值才有作用：Logto／Casdoor 原生支援 RFC 8707 `resource`；Keycloak 需加 audience protocol mapper（原生 RFC 8707 仍是 open issue keycloak#14355），同一 client 多個 `aud` 要靠 optional client scope 切換。租戶邊界的主防線仍是 issuer 比對，`aud` 是 RFC 要求的縱深防禦（見 ADR-0003）。
+
+未設定 `TOKEN_AUDIENCE` 且 `RUN_MODE=PROD` 時，gateway 啟動會印出警告（且在連 IdP 之前），因為此時 RFC 9068 §4 的 MUST 實際上尚未生效。
+
 ## SMART Scopes 的兩種交付形式（ScopeResolver）
 
 IdP 交付 SMART scopes 有兩種標準化形式，gateway 兩種都接受，由單一 `ScopeResolver` 正規化後交給 access checker：
@@ -279,6 +299,7 @@ cp env.example .env
 - `RUN_MODE`：`PROD`（預設）或 `DEV`（容忍 JWT `iss` 與 `TOKEN_ISSUER` 不同）
 - `SIGNING_KEY_SOURCE`：驗簽金鑰來源（trust path）：`auto`（預設）、`jwks`、`keycloak-public-key`。見 [Identity Provider（驗簽金鑰來源）](#identity-provider驗簽金鑰來源)
 - `ALLOW_TOKEN_ISSUER_HOST_MISMATCH`：**Keycloak 專屬**。`true` 時，PROD 下允許 JWT `iss` 的 host 與 `TOKEN_ISSUER` 不同、但 realm path 相同（預設 `false`）
+- `TOKEN_AUDIENCE`：本 gateway 接受的 access token `aud` 值（逗號分隔多個）。留空或未設定 → **不校驗 `aud`**。見 [Audience 校驗](#audience-校驗token_audience)
 - `PORT`：HTTP listen port（預設 `3000`）
 - `WELL_KNOWN_ENDPOINT`：預設 `.well-known/openid-configuration`
 - `ALLOWED_QUERIES_FILE`：Allowed Queries JSON 檔案路徑（見下方 [Allowed Queries 設定檔](#allowed-queries-設定檔)）
