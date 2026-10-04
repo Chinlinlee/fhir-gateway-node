@@ -280,18 +280,6 @@ describe.skipIf(!valkeyAvailable)("launch context in a shared Valkey, over the a
         expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, await tokenWithoutBinding())).status).toBe(200);
     });
 
-    it("stops resolving a launch context once its binding is deleted", async () => {
-        const instance = await buildInstance();
-        const { access_token: accessToken } = await launch(instance.app, { patientId: AUTHORIZED_PATIENT });
-        expect((await fhirGet(instance.app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(200);
-
-        expect(await instance.store.delete(CLINICIAN_SUBJECT, APP_CLIENT_ID)).toBe(true);
-
-        // 綁定消失時，一併指向它的 access token 也必須查不到，而不是繼續授權到最後。
-        expect((await fhirGet(instance.app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(401);
-        expect(await instance.store.delete(CLINICIAN_SUBJECT, APP_CLIENT_ID)).toBe(false);
-    });
-
     it("leaves nothing bindable in Valkey once the unbound launch context expires", async () => {
         const instance = await buildInstance({ launchContextTtlSeconds: 1 });
         const launchId = await registerLaunchContext(instance.app, { patientId: AUTHORIZED_PATIENT });

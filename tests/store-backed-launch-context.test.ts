@@ -266,16 +266,6 @@ describe("launch context owned by the gateway, over the app seam", () => {
         expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, token)).status).toBe(401);
     });
 
-    it("refuses a request once the launch context is no longer in the store", async () => {
-        const app = buildApp();
-        const { access_token: accessToken } = await launch(app, { patientId: AUTHORIZED_PATIENT });
-        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(200);
-
-        await store.delete(CLINICIAN_SUBJECT, APP_CLIENT_ID);
-
-        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(401);
-    });
-
     it("refuses a patient-mode request while the launch context store is unreachable", async () => {
         const app = buildApp({}, unreachableLaunchContextStore());
         const token = await signAccessToken({ jti: "any-token", scope: "patient/Patient.read" });

@@ -129,8 +129,6 @@ describe("DefaultLaunchContextProvider launch context source", () => {
             getByAccessToken: async () => {
                 throw new Error("store down");
             },
-            get: async () => undefined,
-            delete: async () => false,
         };
         const provider = new DefaultLaunchContextProvider(failing);
 

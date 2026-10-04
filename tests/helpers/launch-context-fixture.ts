@@ -82,7 +82,5 @@ export function unreachableLaunchContextStore(): LaunchContextStore {
         bind: fail,
         attachAccessToken: fail,
         getByAccessToken: fail,
-        get: fail,
-        delete: fail,
     };
 }

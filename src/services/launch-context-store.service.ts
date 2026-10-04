@@ -102,29 +102,6 @@ export class InMemoryLaunchContextStore implements LaunchContextStore {
         return launchId === undefined ? undefined : this.readBinding(launchId);
     }
 
-    async get(subject: string, clientId: string): Promise<BoundLaunchContext | undefined> {
-        const launchId = this.bindingIndex.get(launchContextBindingKey(subject, clientId));
-        return launchId === undefined ? undefined : this.readBinding(launchId);
-    }
-
-    async delete(subject: string, clientId: string): Promise<boolean> {
-        const key = launchContextBindingKey(subject, clientId);
-        const launchId = this.bindingIndex.get(key);
-        this.bindingIndex.delete(key);
-        if (launchId === undefined) {
-            return false;
-        }
-
-        const deleted = this.bound.delete(launchId);
-        // 綁定消失時，已接上去的 access token 必須跟著失效：索引指向不存在的綁定等於查無。
-        for (const [tokenId, boundLaunchId] of this.accessTokens) {
-            if (boundLaunchId === launchId) {
-                this.accessTokens.delete(tokenId);
-            }
-        }
-        return deleted;
-    }
-
     private readBinding(launchId: string): BoundLaunchContext | undefined {
         const record = this.bound.get(launchId);
         if (record === undefined) {

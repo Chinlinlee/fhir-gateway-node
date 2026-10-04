@@ -93,25 +93,6 @@ return 1
 `;
 
 /**
- * 刪除綁定的 script：綁定消失時，一併讓所有指向它的 access token 查不到——
- * 索引指向不存在的綁定等於查無。
- */
-const DELETE_SCRIPT = `
-local launchId = redis.call('GET', KEYS[1])
-if not launchId then
-    return 0
-end
-redis.call('DEL', KEYS[1])
-redis.call('DEL', KEYS[2])
-local tokenIds = redis.call('SMEMBERS', KEYS[3])
-for index = 1, #tokenIds do
-    redis.call('DEL', ARGV[1] .. tokenIds[index])
-end
-redis.call('DEL', KEYS[3])
-return 1
-`;
-
-/**
  * 綁定後的 launch context 存成 hash；欄位缺的就是沒有。
  * `boundAt` 存成字串，讀回來時轉回數字。
  */
@@ -229,24 +210,6 @@ export class ValkeyLaunchContextStore implements LaunchContextStore {
         // 綁定過期或被刪時 `bound:` 這筆已不存在，`readBinding` 因此回 `undefined`——
         // 到期等同查無，患者／清單模式因此是 401。
         return launchId === null ? undefined : await this.readBinding(launchId);
-    }
-
-    async get(subject: string, clientId: string): Promise<BoundLaunchContext | undefined> {
-        const launchId = await this.client.get(bindingIndexKey(subject, clientId));
-        return launchId === null ? undefined : await this.readBinding(launchId);
-    }
-
-    async delete(subject: string, clientId: string): Promise<boolean> {
-        const launchId = await this.client.get(bindingIndexKey(subject, clientId));
-        if (launchId === null) {
-            return false;
-        }
-
-        const removed = await this.client.eval(DELETE_SCRIPT, {
-            keys: [bindingIndexKey(subject, clientId), boundKey(launchId), bindingTokensKey(launchId)],
-            arguments: [`${LAUNCH_CONTEXT_KEY_PREFIX}:token:`],
-        });
-        return typeof removed === "number" && removed > 0;
     }
 
     /** 釋放連線；`LaunchContextStore` 介面刻意不要求這件事，只有持有連線的實作才有。 */

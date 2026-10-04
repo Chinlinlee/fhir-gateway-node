@@ -70,20 +70,6 @@ export type LaunchContextStore = {
      * `undefined`。綁定被刪除或到期後，一併指向它的 access token 也查不到。
      */
     getByAccessToken: (tokenId: string) => Promise<BoundLaunchContext | undefined>;
-
-    /**
-     * 依 `(subject, client id)` 回讀**目前**綁定後的 launch context；查無或已過期回傳 `undefined`。
-     *
-     * 這是粗鍵的讀取側，語意是「這組人對這個 App 現在授權到哪一位病人」，因此會跟著後來的
-     * launch 移動。授權裁決走的是 `getByAccessToken`，不是這個。
-     */
-    get: (subject: string, clientId: string) => Promise<BoundLaunchContext | undefined>;
-
-    /**
-     * 刪除 `(subject, client id)` 目前指向的那筆綁定，並讓所有指向它的 access token 查不到；
-     * 原本沒有綁定時回傳 `false`。
-     */
-    delete: (subject: string, clientId: string) => Promise<boolean>;
 };
 
 /** EHR 註冊一次 launch 時送進來的內容；patient 與 patient list 二擇一，就診選填。 */
