@@ -65,4 +65,4 @@
 - **launch context 的內容現在由 EHR 與 gateway 決定，不再依賴 IdP 發得出某個 claim。** 這順帶修掉 `ACCESS_CHECKER=list` 在文件記載的部署中永遠 401 的既有缺陷：EHR 建立 context 時指定 patient list，list 模式端到端可用。
 - gateway 第一次進入 authorization flow。`redirect_uri` 白名單、state／nonce 處理、`online_access` 的 session 語意都是全新議題。
 - **遷移期不支援雙 IdP 並存**。gateway 在 auth flow 裡，同時代理兩個 IdP 會讓授權層複雜度倍增。改採停機切換——這是明確決定，不是遺漏。
-- **稽核缺口擴大**：context 不在 token 裡代表 token 本身不含 PHI，「誰授權了這個醫師看這個病人」的唯一來源就是 gateway 記錄的 launch lifecycle。context 的建立（EHR 註冊）、綁定（callback）與 access（每次 FHIR 請求）都已有實作，但**它們目前不會產生任何 AuditEvent**——Launch AuditEvent 尚未實作，因此這三件事在稽核軌跡裡不存在。這是本 ADR 承認的缺口，不是已完成的能力。
+- **稽核缺口已被補上，但代價是 gateway 成為 PHI 授權軌跡的唯一來源。** context 不在 token 裡代表 token 本身不含 PHI，「誰授權了這個醫師看這個病人」的唯一來源就是 gateway 記錄的 launch lifecycle。建立（EHR 註冊）與綁定（callback）兩個時點各產生一則 Launch AuditEvent，與 access AuditEvent 共用同一條輸出管道、以 `type.system` 分類；access（每一次 FHIR 存取）則維持原樣。因此 launch lifecycle 事件的稽核不能隨意關閉或降級成「記錄失敗就算了」——`AUDIT_EVENT_ACTIONS_CONFIG` 留空時是完全不稽核，而不是改記一半。撤銷事件的稽核仍未實作，它依附於 ADR-0004 的 session 存活檢查。

@@ -324,7 +324,7 @@ cp env.example .env
 - `PORT`：HTTP listen port（預設 `3000`）
 - `WELL_KNOWN_ENDPOINT`：預設 `.well-known/openid-configuration`
 - `ALLOWED_QUERIES_FILE`：Allowed Queries JSON 檔案路徑（見下方 [Allowed Queries 設定檔](#allowed-queries-設定檔)）
-- `AUDIT_EVENT_ACTIONS_CONFIG`：AuditEvent action code 字串（例如 `CRUDE`）
+- `AUDIT_EVENT_ACTIONS_CONFIG`：AuditEvent action code 字串（例如 `CRUDE`）。**留空 = 完全不稽核**（含 launch lifecycle 事件）。見 [Launch AuditEvent](#launch-auditevent)
 - `INTERNAL_LAUNCH_API_ENABLED`：`true` 時啟用 EHR 面向的內部 launch context 端點（預設 `false`）。**`ACCESS_CHECKER=patient` 或 `list` 時這是必要條件**——launch context 由 gateway 自己持有，EHR 不註冊就沒有病人參照。見 [內部 Launch Context 端點](#內部-launch-context-端點)
 - `INTERNAL_LAUNCH_API_CREDENTIAL`：內部端點的認證憑證。`INTERNAL_LAUNCH_API_ENABLED=true` 而未設定時，gateway **啟動即失敗**並指名這個變數
 - `LAUNCH_CONTEXT_TTL_SECONDS`：未綁定 launch context 的存活秒數（預設 `600`）。只管**綁定前**那一段；綁定後的生命週期目前由 gateway 自管，尚無 TTL（見 ADR-0004）
@@ -489,6 +489,41 @@ gateway 自己：
 | `GET` | `/smart/authorize` | 對外宣告的 authorization endpoint；驗 launch id 後轉發給 IdP |
 | `GET` | `/smart/callback` | gateway 自己的 callback；綁定點發生在這裡 |
 | `POST` | `/smart/token` | 對外宣告的 token endpoint；code exchange 與 refresh |
+
+## Launch AuditEvent
+
+launch context 歸 gateway 所有之後，access token 裡不再有病人資訊——「誰授權了這位醫師看這位病人」
+只剩 gateway 自己知道。因此 launch lifecycle 的兩個時點各產生一則 Launch AuditEvent：
+
+| 時點 | 發生在哪 | 記錄的內容 |
+| --- | --- | --- |
+| context 建立 | `POST /internal/launch-contexts`（EHR 註冊） | 建立者（EHR 服務帳號）與綁定的病人參考 |
+| context 綁定 | `GET /smart/callback`（authorization flow 的綁定點） | 被授權的使用者（IdP ＋ `sub`）、被授權的 client id、綁定的病人參考 |
+
+事件內容只放這幾樣，不寫 request body、不寫整包資源。就診參照（`encounterId`）也不寫：回答
+「誰在何時授權哪位醫師看哪位病人」不需要它。
+
+### 與 access AuditEvent 的關係
+
+兩者是不同的稽核類別，**共用同一條輸出管道**（同樣 `POST {PROXY_TO}/AuditEvent`、同樣的 backend
+寫入），不開第二套稽核系統。稽核消費者以 `type.system` 分流：
+
+| 類別 | `type.system` | `action` |
+| --- | --- | --- |
+| access AuditEvent | `http://terminology.hl7.org/CodeSystem/audit-event-type` | 依 FHIR 存取動作（`C`／`R`／`U`／`D`／`E`） |
+| Launch AuditEvent | `http://smart-fhir-gateway.example/CodeSystem/audit-event-type`（本專案自用 placeholder） | 建立 `C`、綁定 `U` |
+
+launch 的建立與綁定再由 `subtype.code` 分開（`launch-context-registered`／`launch-context-bound`）。
+`AuditEvent.type` 的 binding 是 extensible（<https://hl7.org/fhir/R4/auditevent.html> 6.4.3.3），
+所以自訂 system 合法；醫院要換成自己的 namespace 時改 `src/services/audit-event.service.ts` 一處常數。
+
+### 開關與失敗處理
+
+- `AUDIT_EVENT_ACTIONS_CONFIG` 仍是唯一的稽核開關：**留空 = 完全不稽核**，launch lifecycle 事件也一併
+  不送。那幾個 action code 篩的是「哪一種 FHIR 存取」，launch 事件不是存取，因此不受 code 過濾。
+- **稽核後端故障不改變任何授權結果。** 稽核寫入被 try/catch 包住：launch 註冊照回 `201`、
+  綁定照常發 code、FHIR 請求的授權裁決照常成立。應用日誌只記「送不出去」這件事，不記病人參照。
+- 撤銷（revocation）時點的稽核尚未實作：它依附於 ADR-0004 的 session 存活檢查。
 
 ## Allowed Queries 設定檔
 
