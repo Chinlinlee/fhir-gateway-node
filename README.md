@@ -64,10 +64,10 @@ IdP 交付 SMART scopes 有兩種標準化形式，gateway 兩種都接受，由
 
 ## Patient Access Checker Flow（SMART Patient-specific scopes）
 
-`ACCESS_CHECKER=patient` 時，gateway 會依 SMART scope principal 決定授權模式：
+`ACCESS_CHECKER=patient` 時，gateway 會同時評估 token 內所有 principal 的 scope，不做優先序挑選：
 
-- scope 含 `patient/...`：使用 patient-specific 授權（需要 `patient` claim）
-- scope 只有 `user/...` 或 `system/...`：僅做 SMART scope CRUDS 權限檢查（不綁單一病人）
+- scope 含 `patient/...`：patient compartment 資源（`Patient`、`Observation`、`Encounter` 等）走 patient-specific 授權（需要 `patient` claim），且引用病人必須等於該 claim
+- scope 含 `user/...` 或 `system/...`：非 patient compartment 資源走 SMART scope CRUDS 權限檢查（不綁單一病人）
 
 流程圖（client 到 FHIR server）：
 
@@ -75,12 +75,12 @@ IdP 交付 SMART scopes 有兩種標準化形式，gateway 兩種都接受，由
 flowchart TD
     A[Client App] -->|1. Send FHIR request + Bearer token| B[fhir-gateway-node FhirProxyController]
     B -->|2. Verify JWT issuer/signature/exp| C[Parse SMART scopes from scope claim]
-    C -->|3. Resolve principal patient > user > system| D[PatientAccessCheckerFactory]
+    C -->|3. Build per-principal scope checkers (patient/user/system)| D[PatientAccessCheckerFactory]
 
-    D -->|principal = patient| E[Read patient claim as authorizedPatientId]
+    D -->|scope contains patient/...| E[Read launch patientId as authorizedPatientId]
     E --> F[Build PatientAccessCheckerService]
 
-    D -->|principal = user/system| G[authorizedPatientId = null]
+    D -->|scope contains only user/... or system/...| G[authorizedPatientId = null]
     G --> F
 
     F --> H[Check SMART permission by resource + method CREATE/READ/UPDATE/DELETE/SEARCH]
