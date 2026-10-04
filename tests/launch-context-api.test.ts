@@ -10,6 +10,7 @@ const INTERNAL_CREDENTIAL_HEADER = "x-internal-credential";
 const INTERNAL_CREDENTIAL = "ehr-service-credential";
 const PATIENT_ID = "456";
 const ENCOUNTER_ID = "enc-1";
+const PATIENT_LIST_ID = "patient-list-1";
 const REGISTER_PATH = "http://localhost/internal/launch-contexts";
 
 function createConfig(overrides: Partial<GatewayConfig> = {}): GatewayConfig {
@@ -82,6 +83,40 @@ describe("internal launch context API", () => {
         const response = await app.handle(registerRequest({ patientId: PATIENT_ID }));
 
         expect(response.status).toBe(201);
+    });
+
+    it("registers a launch context that authorizes a patient list instead of a single patient", async () => {
+        const store = new InMemoryLaunchContextStore();
+        const app = createApp({ config: createConfig(), launchContextStore: store });
+
+        const response = await app.handle(registerRequest({ patientListId: PATIENT_LIST_ID }));
+        const body = (await response.json()) as { launchId: string };
+        const bound = await store.bind(body.launchId, "user-1", "app-1");
+
+        expect(response.status).toBe(201);
+        expect(bound?.patientListId).toBe(PATIENT_LIST_ID);
+        expect(bound?.patientId).toBeUndefined();
+    });
+
+    it("rejects a registration that names both a patient and a patient list", async () => {
+        const app = createApp({ config: createConfig() });
+
+        expect(
+            (await app.handle(registerRequest({ patientId: PATIENT_ID, patientListId: PATIENT_LIST_ID }))).status,
+        ).toBe(400);
+    });
+
+    it("does not write the patient list into the application log", async () => {
+        const logLines: string[] = [];
+        vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
+            logLines.push(args.map(String).join(" "));
+        });
+        const app = createApp({ config: createConfig() });
+
+        const created = await app.handle(registerRequest({ patientListId: PATIENT_LIST_ID }));
+
+        expect(created.status).toBe(201);
+        expect(logLines.join("\n")).not.toContain(PATIENT_LIST_ID);
     });
 
     it("issues a distinct launch id per registration", async () => {

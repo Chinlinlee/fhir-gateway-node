@@ -5,6 +5,7 @@ import type { SmartAuthorizationSessions } from "../../services/smart-authorizat
 import type { TokenVerifierService } from "../../services/token-verifier.service";
 import type { LaunchContextStore } from "../../types/launch-context-store";
 import type { IssuedAuthorization, PendingAuthorization } from "../../types/smart-authorization";
+import type { VerifiedJwt } from "../../types/verified-jwt";
 import { constantTimeEquals } from "../../utils/constant-time.util";
 import { createPkcePair, matchesS256Challenge, PKCE_CHALLENGE_METHOD_S256 } from "../../utils/pkce.util";
 import { smartEndpointUrl } from "../../utils/smart-endpoint.util";
@@ -143,7 +144,8 @@ export abstract class SmartAuthorizationController {
         }
 
         // 綁定索引鍵是 `(subject, client id)`：client id 取 App 的，不是 gateway 自己的 IdP
-        // client——code exchange 是 gateway 做的，token 的 `azp` 會是 gateway 自己。
+        // client——code exchange 是 gateway 做的，token 的 `azp` 會是 gateway 自己，因此
+        // App 的身分只存在於這一次 authorize 記下的 pending 裡。
         const bound = await deps.store.bind(pending.launchId, subject, pending.clientId);
         if (bound === undefined) {
             throw new OAuthError(
@@ -155,6 +157,8 @@ export abstract class SmartAuthorizationController {
 
         const issued: IssuedAuthorization = {
             accessToken: tokens.accessToken,
+            subject,
+            ...(verified.payload.jti !== undefined ? { accessTokenId: verified.payload.jti } : {}),
             ...(tokens.refreshToken !== undefined ? { refreshToken: tokens.refreshToken } : {}),
             tokenType: tokens.tokenType,
             scope: tokens.scope ?? "",
@@ -210,6 +214,7 @@ export abstract class SmartAuthorizationController {
             throw new OAuthError("invalid_grant", "The client does not match the authorization request.");
         }
 
+        await attachToBinding(issued.accessTokenId, issued.subject, issued.clientId, deps.store);
         return tokenResponse(issued);
     }
 
@@ -236,16 +241,54 @@ export abstract class SmartAuthorizationController {
             throw new OAuthError("invalid_grant", "The identity provider did not issue a new refresh token.");
         }
 
+        // 換發的 access token 是另一張 token：它一樣屬於這次授權，因此要重新接上同一筆綁定，
+        // 否則 refresh 之後的 FHIR 請求會查不到 launch context 而被 401。
+        // 順帶在交給 App 之前先驗一次：gateway 不會把一張自己都驗不過的 token 發出去。
+        const verified = await verifyRefreshedAccessToken(tokens.accessToken, deps.tokenVerifier);
+
         const refreshed: IssuedAuthorization = {
             ...issued,
             accessToken: tokens.accessToken,
+            ...(verified.payload.jti !== undefined ? { accessTokenId: verified.payload.jti } : {}),
             refreshToken: tokens.refreshToken,
             tokenType: tokens.tokenType,
             ...(tokens.expiresInSeconds !== undefined ? { expiresInSeconds: tokens.expiresInSeconds } : {}),
         };
         deps.sessions.rotateRefreshToken(refreshToken, refreshed);
+        await attachToBinding(refreshed.accessTokenId, refreshed.subject, refreshed.clientId, deps.store);
 
         return tokenResponse(refreshed);
+    }
+}
+
+/**
+ * 把即將交給 App 的 access token 接上它所屬的綁定。
+ *
+ * IdP 沒發 `jti` 時沒有索引鍵，這時不接：該 token 在 patient／list 模式會拿不到 launch
+ * context 而被 401，而不是被當成「沒有病人限制」。這是對 IdP 的硬性要求，不是可選行為。
+ */
+async function attachToBinding(
+    tokenId: string | undefined,
+    subject: string,
+    clientId: string,
+    store: LaunchContextStore,
+): Promise<void> {
+    if (tokenId === undefined) {
+        console.error("[smart] the identity provider issued an access token without a jti; it has no launch context");
+        return;
+    }
+    await store.attachAccessToken(tokenId, subject, clientId);
+}
+
+/** IdP 換發的 access token 若連 gateway 自己都驗不過，這次 refresh 就不能完成。 */
+async function verifyRefreshedAccessToken(
+    accessToken: string,
+    tokenVerifier: TokenVerifierService,
+): Promise<VerifiedJwt> {
+    try {
+        return await tokenVerifier.decodeAndVerifyBearerToken(`Bearer ${accessToken}`);
+    } catch (error) {
+        throw new OAuthError("invalid_grant", "The refreshed access token could not be verified.", { cause: error });
     }
 }
 

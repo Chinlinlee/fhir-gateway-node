@@ -5,34 +5,36 @@ import {
     AccessCheckerRegistryService,
     createDefaultAccessCheckerRegistry,
 } from "../src/services/access-checker-registry.service";
-import type { AccessChecker, AccessCheckerFactory } from "../src/types/access-checker";
+import type { AccessChecker, AccessCheckerCreateContext, AccessCheckerFactory } from "../src/types/access-checker";
 import { accessGranted } from "../src/types/access-decision";
 import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 
-const stubContext = {
-    launch: launchContextFromClaims({ sub: "user-1" }),
-    patientFinder: {
-        findPatientsFromParams: () => new Set<string>(),
-        findPatientsForAccessCheck: () => new Set<string>(),
-        findPatientsInResource: () => new Set<string>(),
-        findPatientsInPatch: () => new Set<string>(),
-        findPatientsInBundle: () => ({
-            referencedPatients: [],
-            updatedPatients: new Set<string>(),
-            deletedPatients: new Set<string>(),
-            patientsToCreate: false,
-        }),
-        isPatientCompartmentResource: () => false,
-    },
+const stubPatientFinder = {
+    findPatientsFromParams: () => new Set<string>(),
+    findPatientsForAccessCheck: () => new Set<string>(),
+    findPatientsInResource: () => new Set<string>(),
+    findPatientsInPatch: () => new Set<string>(),
+    findPatientsInBundle: () => ({
+        referencedPatients: [],
+        updatedPatients: new Set<string>(),
+        deletedPatients: new Set<string>(),
+        patientsToCreate: false,
+    }),
+    isPatientCompartmentResource: () => false,
 };
 
+const stubContext = async (): Promise<AccessCheckerCreateContext> => ({
+    launch: await launchContextFromClaims({ sub: "user-1" }),
+    patientFinder: stubPatientFinder,
+});
+
 describe("AccessCheckerRegistryService", () => {
-    it("createDefaultAccessCheckerRegistry registers built-in checkers", () => {
+    it("createDefaultAccessCheckerRegistry registers built-in checkers", async () => {
         const registry = createDefaultAccessCheckerRegistry();
         expect(registry.has("permissive")).toBe(true);
         expect(registry.has("list")).toBe(true);
         expect(registry.has("patient")).toBe(true);
-        const checker = registry.create("permissive", stubContext);
+        const checker = registry.create("permissive", await stubContext());
         const decision = checker.checkAccess({
             requestPath: "Patient",
             requestType: "GET",
@@ -41,12 +43,14 @@ describe("AccessCheckerRegistryService", () => {
         expect(decision.canAccess()).toBe(true);
     });
 
-    it("throws AuthenticationError for unknown checker name", () => {
+    it("throws AuthenticationError for unknown checker name", async () => {
         const registry = new AccessCheckerRegistryService();
-        expect(() => registry.create("unknown", stubContext)).toThrow(AuthenticationError);
+        const context = await stubContext();
+
+        expect(() => registry.create("unknown", context)).toThrow(AuthenticationError);
     });
 
-    it("register and create custom factory", () => {
+    it("register and create custom factory", async () => {
         const registry = new AccessCheckerRegistryService();
         const factory: AccessCheckerFactory = {
             create: (): AccessChecker => ({
@@ -54,7 +58,7 @@ describe("AccessCheckerRegistryService", () => {
             }),
         };
         registry.register("custom", factory);
-        const checker = registry.create("custom", stubContext);
+        const checker = registry.create("custom", await stubContext());
         expect(
             checker
                 .checkAccess({

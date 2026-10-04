@@ -30,6 +30,10 @@ export type PendingAuthorization = {
 export type IssuedAuthorization = {
     /** IdP 簽發的 access token，gateway 原樣交給 App，不重新簽發。 */
     accessToken: string;
+    /** 這張 access token 的 `jti`；launch context store 靠它把 App 帶來的 token 接回綁定。 */
+    accessTokenId?: string;
+    /** 綁定發生時 IdP 簽發的 `sub`；token endpoint 換發時靠它接回同一筆綁定。 */
+    subject: string;
     /** IdP 簽發的 refresh token；refresh grant 以它為索引鍵。IdP 不發時沒有這個授權。 */
     refreshToken?: string;
     tokenType: string;

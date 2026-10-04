@@ -45,11 +45,17 @@
 
 ### `helpers/launch-context-fixture.ts` — launch context
 
-`launchContextFromClaims(claims)` 用**真實的** `DefaultLaunchContextProvider` 把 JWT claim 轉成
-`LaunchContext`。測試不需要知道 claim name 的細節——這是刻意的：改用真實 provider 才能確保
-測試不會因為 claim name 改動而與實際行為脫節。
+launch context 的病人參照由 gateway 自己的 store 提供（ADR-0002），**不在 token 裡**，因此
+fixture 也得走 store。三個 helper 都用**真實的** `DefaultLaunchContextProvider`：
 
-單元測試 access checker 時用它取代過去直接塞 `jwt` 的寫法。
+- `launchContextFromClaims(claims)`：背後是一個什麼都沒綁定的 store，因此 `patientId`／
+  `patientListId` 一定是 `undefined`——這正是「沒有 launch context」在授權層的樣子。
+- `launchContextWithPatient(patientId, claims)`：先在 store 裡建立並綁定一份 context，再讓 provider
+  讀回來。窄的 checker 單元測試用它取代過去直接塞 `patient` claim 的寫法。
+- `seedLaunchContextForToken(store, { subject, clientId, tokenId }, { patientId | patientListId })`：
+  給 app-over-HTTP 測試用。測試自己簽 token，因此必須把綁定接到那張 token 的 `jti` 上，並把
+  `launchContextStore` 注入 `createApp`。**忘了這一步，patient／list 模式的請求一律 401**，
+  而且是不會報錯的那一種。
 
 ### `helpers/access-checker-fixture.ts` — access checker 測試常數
 

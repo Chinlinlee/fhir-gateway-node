@@ -4,12 +4,23 @@
 
 原 Java 專案：[`fhir-gateway`](https://github.com/ohs-foundation/fhir-gateway)
 
-## Keycloak（SMART on FHIR）
+## Identity Provider（需要什麼、不需要什麼）
 
-本專案搭配的 Keycloak SPI 專案為 [`zedwerks/keycloak-smart-fhir`](https://github.com/zedwerks/keycloak-smart-fhir)。
+gateway 對 IdP 的要求只剩下**標準 OIDC**：OIDC discovery document、`jwks_uri`，以及在啟用
+[SMART Authorization Flow 代理](#smart-authorization-flow-代理) 時能接受一個 confidential client。
+**本專案不再需要任何 Keycloak SPI**——過去搭配的
+[`zedwerks/keycloak-smart-fhir`](https://github.com/zedwerks/keycloak-smart-fhir) 那個把病人寫進
+token 的 mapper 已不再需要。
 
-- realm 請使用 `smart`
-- patient-based flow 需使用 `patient` claim（JWT claim key: `patient`）
+**病人與病人清單不是 IdP 的事。** launch context 由 gateway 自己持有：EHR 在 App 開啟前向
+gateway 的[內部 Launch Context 端點](#內部-launch-context-端點)註冊「這次 launch 關於哪個病人或
+哪份清單」，gateway 記住它並在授權裁決時讀回來（見
+`docs/adr/0002-launch-context-owned-by-gateway.md`）。**access token 裡沒有任何病人資訊**——
+token 被竊取時不直接洩漏 PHI。
+
+IdP 唯一與 launch context 相關的硬性要求：**access token 必須帶 `jti`**（RFC 7519 §4.1.7）。
+gateway 用它認出「這張 token 屬於哪一次授權」。沒有 `jti` 的 token 在 `patient`／`list` 模式
+拿不到 launch context，會以 401 收場，**不會**退化成「沒有病人限制」。
 
 ## Identity Provider（驗簽金鑰來源）
 
@@ -80,13 +91,13 @@ IdP 交付 SMART scopes 有兩種標準化形式，gateway 兩種都接受，由
 
 - JWT 必須含至少一個 SMART FHIR scope（`patient/`、`user/` 或 `system/`）
 - 不區分 principal level，將所有 scope 的 cruds 權限做 union 後依 HTTP method 驗證
-- 不檢查 `patient` claim 或病人參照
+- 不檢查 launch context，也不看病人參照
 
 ## Patient Access Checker Flow（SMART Patient-specific scopes）
 
 `ACCESS_CHECKER=patient` 時，gateway 會同時評估 token 內所有 principal 的 scope，不做優先序挑選：
 
-- scope 含 `patient/...`：patient compartment 資源（`Patient`、`Observation`、`Encounter` 等）走 patient-specific 授權（需要 `patient` claim），且引用病人必須等於該 claim
+- scope 含 `patient/...`：patient compartment 資源（`Patient`、`Observation`、`Encounter` 等）走 patient-specific 授權（需要 launch context 綁定的病人），且引用病人必須等於該病人
 - scope 含 `user/...` 或 `system/...`：非 patient compartment 資源走 SMART scope CRUDS 權限檢查（不綁單一病人）
 
 流程圖（client 到 FHIR server）：
@@ -97,7 +108,7 @@ flowchart TD
     B -->|2. Verify JWT issuer/signature/exp| C[Parse SMART scopes from scope claim]
     C -->|3. Build per-principal scope checkers (patient/user/system)| D[PatientAccessCheckerFactory]
 
-    D -->|scope contains patient/...| E[Read launch patientId as authorizedPatientId]
+    D -->|scope contains patient/...| E[Read store-backed patientId as authorizedPatientId]
     E --> F[Build PatientAccessCheckerService]
 
     D -->|scope contains only user/... or system/...| G[authorizedPatientId = null]
@@ -131,8 +142,8 @@ Access Checker 是 gateway 在 JWT 驗證通過、且 Allowed Queries 未放行�
 | `AccessCheckerCreateContext` | Factory 可用依賴：`launch`、`patientFinder`、（選用）`fhirBackend` |
 | `FhirRequestDetails` | 請求摘要：`requestPath`、`requestType`、`queryParams`、`requestBody?` |
 | `AccessDecision` | 授權結果；可選附帶 mutation / postProcess / audit user |
-| `LaunchContext` | verified token 轉譯出的 IdP 中立 DTO：`subject`、`patientId?`、`patientListId?`、`scopes`、`agent` |
-| `LaunchContextProvider` | 由 verified token 建立 `LaunchContext`；**唯一**知道 claim 名稱的地方 |
+| `LaunchContext` | 授權裁決的輸入 DTO：`subject`、`patientId?`、`patientListId?`（這兩個來自 launch context store）、`scopes`、`agent`（來自 verified token） |
+| `LaunchContextProvider` | 建立 `LaunchContext`；病人參照查 store、其餘讀 verified token。**唯一**知道 claim 名稱的地方 |
 | `ScopeResolver` | 由 token claims 解析 SMART scopes；接受 `scope` 字串與 RFC 9068 `scp` 陣列兩種標準形式 |
 
 請求處理順序（`FhirProxyController`）：
@@ -213,13 +224,23 @@ createApp({ tokenVerifier, config: { ...config, accessChecker: "my-checker" }, a
 **LaunchContext**
 
 ```typescript
-const scopes = context.launch.scopes;
-const patientId = context.launch.patientId; // string | undefined
-const patientListId = context.launch.patientListId; // string | undefined
-const agent = context.launch.agent; // { authorizedParty?, issuer?, tokenId?, subject?, displayName? }
+const scopes = context.launch.scopes;              // 來自 verified token
+const patientId = context.launch.patientId;        // 來自 launch context store；string | undefined
+const patientListId = context.launch.patientListId; // 來自 launch context store；string | undefined
+const agent = context.launch.agent;                // 來自 verified token
 ```
 
-Access checker **不得**直接讀 raw JWT claims；claim 名稱只存在於 `LaunchContextProvider`（`src/services/launch-context.service.ts` 的 `LAUNCH_CLAIM_NAMES`）。自訂 checker 需要新的 token 欄位時，擴充 `LaunchContext` 與 provider，不要在 checker 裡加 `payload[claim]`。
+**DTO 的欄位來自兩個地方，這是刻意的**（ADR-0002）：`patientId`／`patientListId` 是 PHI，來自
+**gateway 自己的 launch context store**，不在 access token 裡；`subject`／`scopes`／`agent` 不是
+PHI，來自 **verified token**——scope 是 AS 的授權決定，gateway 去猜等於越權。
+
+Access checker **不得**直接讀 raw JWT claims；claim 名稱只存在於 `LaunchContextProvider`
+（`src/services/launch-context.service.ts` 的 `LAUNCH_CLAIM_NAMES`）。自訂 checker 需要新的 token
+欄位時，擴充 `LaunchContext` 與 provider，不要在 checker 裡加 `payload[claim]`。
+
+`patientId`／`patientListId` 為 `undefined` 有兩種同義的原因：gateway 的 store 裡沒有這次授權的
+context，或 store 不可達。**兩者都不會退回讀 token**——需要 launch context 的 checker 會因此拒絕
+（401）。`getLaunchIdOrFail` 拋 `AuthenticationError` 時訊息會命名缺少的邏輯欄位。
 
 Launch context 欄位缺少或格式錯誤時拋 `AuthenticationError`（回 401），訊息會命名缺少的邏輯欄位；請求格式錯誤拋 `InvalidRequestError`（回 400）。
 
@@ -304,10 +325,10 @@ cp env.example .env
 - `WELL_KNOWN_ENDPOINT`：預設 `.well-known/openid-configuration`
 - `ALLOWED_QUERIES_FILE`：Allowed Queries JSON 檔案路徑（見下方 [Allowed Queries 設定檔](#allowed-queries-設定檔)）
 - `AUDIT_EVENT_ACTIONS_CONFIG`：AuditEvent action code 字串（例如 `CRUDE`）
-- `INTERNAL_LAUNCH_API_ENABLED`：`true` 時啟用 EHR 面向的內部 launch context 端點（預設 `false`）。見 [內部 Launch Context 端點](#內部-launch-context-端點)
+- `INTERNAL_LAUNCH_API_ENABLED`：`true` 時啟用 EHR 面向的內部 launch context 端點（預設 `false`）。**`ACCESS_CHECKER=patient` 或 `list` 時這是必要條件**——launch context 由 gateway 自己持有，EHR 不註冊就沒有病人參照。見 [內部 Launch Context 端點](#內部-launch-context-端點)
 - `INTERNAL_LAUNCH_API_CREDENTIAL`：內部端點的認證憑證。`INTERNAL_LAUNCH_API_ENABLED=true` 而未設定時，gateway **啟動即失敗**並指名這個變數
-- `LAUNCH_CONTEXT_TTL_SECONDS`：未綁定 launch context 的存活秒數（預設 `600`）
-- `GATEWAY_PUBLIC_BASE_URL`：gateway 對外可被 SMART App 呼叫的 base URL。設定它等同啟用代理的 SMART authorization flow（留空 = 不代理，維持被動）。見 [SMART Authorization Flow 代理](#smart-authorization-flow-代理)
+- `LAUNCH_CONTEXT_TTL_SECONDS`：未綁定 launch context 的存活秒數（預設 `600`）。只管**綁定前**那一段；綁定後的生命週期目前由 gateway 自管，尚無 TTL（見 ADR-0004）
+- `GATEWAY_PUBLIC_BASE_URL`：gateway 對外可被 SMART App 呼叫的 base URL。設定它等同啟用代理的 SMART authorization flow（留空 = 不代理，維持被動）。**留空時沒有任何綁定會發生，`ACCESS_CHECKER=patient`／`list` 的請求一律 401**——這是 ADR-0002 硬切的結果，不是可選擇的降級。見 [SMART Authorization Flow 代理](#smart-authorization-flow-代理)
 - `GATEWAY_CLIENT_ID`：gateway 自己當 IdP client 的 client id。設定 `GATEWAY_PUBLIC_BASE_URL` 而缺任一項時，gateway **啟動即失敗**並指名該變數
 - `GATEWAY_CLIENT_SECRET`：對應的 client secret
 
@@ -350,7 +371,8 @@ curl -X POST http://localhost:3000/internal/launch-contexts \
   -d '{"patientId":"456","encounterId":"enc-1"}'
 ```
 
-`patientId` 必要，`encounterId` 選填。回應 `201`：
+`patientId` 與 `patientListId` **二擇一、非同時**，至少給一個：`patientId` 對應 patient compartment
+launch，`patientListId` 對應 `ACCESS_CHECKER=list` 的清單 launch。`encounterId` 選填。回應 `201`：
 
 ```json
 {
@@ -363,18 +385,27 @@ curl -X POST http://localhost:3000/internal/launch-contexts \
 - `launchId` 由 gateway 生成，opaque、單次可用，**無法從中推導出病人或使用者身分**。
 - 未綁定的 launch context 在 `LAUNCH_CONTEXT_TTL_SECONDS` 後到期；過期或未知的 launch id 在查詢時
   視為不存在。
-- 請求與回應的記錄不把 PHI（patient／encounter）寫進應用日誌。
+- 請求與回應的記錄不把 PHI（patient／patient list／encounter）寫進應用日誌。
 
 回應格式：`launchId` 缺少或型別不符回 `400`；未帶或帶錯 `X-Internal-Credential` 回 `401`。
+
+patient list launch 的呼叫範例：
+
+```bash
+curl -X POST http://localhost:3000/internal/launch-contexts \
+  -H 'content-type: application/json' \
+  -H "X-Internal-Credential: ${INTERNAL_LAUNCH_API_CREDENTIAL}" \
+  -d '{"patientListId":"patient-list-1"}'
+```
 
 ### 儲存
 
 launch context 存放在一個窄介面（`LaunchContextStore`，`src/types/launch-context-store.ts`）後面，
-本票提供 in-memory 實作供測試與單機開發使用，不需要 docker 或外部服務；實作可在 app 建構時
+目前提供 in-memory 實作供測試與單機開發使用，不需要 docker 或外部服務；實作可在 app 建構時
 以 `createApp({ launchContextStore })` 注入。正式環境的 Valkey 實作見後續票。
 
-**本票不改變任何授權裁決**：launch context 的內容仍然由 access token 的 `patient` claim 提供，
-既有請求的結果與本票之前完全一致。
+launch context 的**內容**由這裡決定（`patientId` 或 `patientListId` 二擇一），授權層在裁決時
+從 store 讀回來。access token 裡沒有病人資訊。
 
 ## SMART Authorization Flow 代理
 
@@ -447,8 +478,9 @@ gateway 自己：
   launch id 與 gateway code 皆單次可用，任一者被重放時請求被拒絕。
 - 支援 authorization code flow 與 refresh；不支援 implicit flow。
 - `SMART` 的 `revocation_endpoint` 與 introspection 維持 IdP 的，gateway 不擴張到 token 撤銷語意。
-- **本票不改變任何授權裁決**：launch context 的內容仍然由 access token 的 claim 提供，既有測試
-  不經修改通過。改變 context 來源是後續票的事。
+- **launch context 由 gateway 持有，不在 token 裡。** 授權層依 App 帶來的 access token 的 `jti`
+  找回綁定；store 查不到就是拒絕（401），store 不可達時 `patient`／`list` 模式同樣 401，
+  不需要 launch context 的模式照常服務。詳見 ADR-0002。
 
 ### 端點一覽
 

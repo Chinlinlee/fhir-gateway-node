@@ -71,18 +71,20 @@ describe("BasicAccessCheckerService", () => {
 });
 
 describe("basicAccessCheckerFactory", () => {
-    it("throws when JWT has no SMART FHIR scopes", () => {
+    it("throws when JWT has no SMART FHIR scopes", async () => {
+        const launch = await launchContextFromClaims({ [SCOPES_CLAIM]: "openid profile" });
+
         expect(() =>
             basicAccessCheckerFactory.create({
-                launch: launchContextFromClaims({ [SCOPES_CLAIM]: "openid profile" }),
+                launch,
                 patientFinder: PatientFinderService.getInstance(),
             }),
         ).toThrow(AuthenticationError);
     });
 
-    it("creates checker when any principal scope is present", () => {
+    it("creates checker when any principal scope is present", async () => {
         const checker = basicAccessCheckerFactory.create({
-            launch: launchContextFromClaims({ [SCOPES_CLAIM]: "system/*.rs" }),
+            launch: await launchContextFromClaims({ [SCOPES_CLAIM]: "system/*.rs" }),
             patientFinder: PatientFinderService.getInstance(),
         });
 

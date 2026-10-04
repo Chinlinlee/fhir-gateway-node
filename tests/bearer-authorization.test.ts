@@ -8,13 +8,14 @@ import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
 import { createDefaultAccessCheckerRegistry } from "../src/services/access-checker-registry.service";
-import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
 import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
+import { InMemoryLaunchContextStore } from "../src/services/launch-context-store.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import type { AccessChecker, AccessCheckerFactory } from "../src/types/access-checker";
 import { allowedQueriesFixturePath } from "./helpers/allowed-queries-fixture";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
+import { seedLaunchContextForToken } from "./helpers/launch-context-fixture";
 
 type UpstreamServer = {
     baseUrl: string;
@@ -145,6 +146,8 @@ describe("Bearer authorization proxy flow", () => {
     let issuer: IssuerTestServer;
     let upstream: UpstreamServer;
     let tokenVerifier: TokenVerifierService;
+    // 病人參照改由 launch context store 提供：測試自簽 token，因此 app 與 seed 共用同一份 store。
+    let launchContextStore: InMemoryLaunchContextStore;
 
     beforeEach(async () => {
         issuer = await startIssuerTestServer("test");
@@ -155,6 +158,7 @@ describe("Bearer authorization proxy flow", () => {
             runMode: "PROD",
             allowTokenIssuerHostMismatch: false,
         });
+        launchContextStore = new InMemoryLaunchContextStore();
     });
 
     afterEach(async () => {
@@ -173,11 +177,17 @@ describe("Bearer authorization proxy flow", () => {
             config,
             allowedQueries: AllowedQueriesCheckerService.loadFromFile(config.allowedQueriesFile),
             patientFinder: PatientFinderService.getInstance(),
+            launchContextStore,
         });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [PATIENT_CLAIM]: "456",
+            jti: "token-1",
             scope: "patient/Patient.read patient/Observation.read",
         });
+        await seedLaunchContextForToken(
+            launchContextStore,
+            { subject: "gateway-user", clientId: "test-app", tokenId: "token-1" },
+            { patientId: "456" },
+        );
 
         const patientResponse = await app.handle(
             new Request(`http://localhost${FHIR_API_PREFIX}/Patient/456`, {
@@ -205,11 +215,16 @@ describe("Bearer authorization proxy flow", () => {
             tokenIssuer: issuer.issuerUrl,
             proxyTo: upstream.baseUrl,
         });
-        const app = createApp({ tokenVerifier, config });
+        const app = createApp({ tokenVerifier, config, launchContextStore });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [PATIENT_CLAIM]: "456",
+            jti: "token-2",
             scope: "patient/Patient.read",
         });
+        await seedLaunchContextForToken(
+            launchContextStore,
+            { subject: "gateway-user", clientId: "test-app", tokenId: "token-2" },
+            { patientId: "456" },
+        );
 
         const replacedResponse = await app.handle(
             new Request(`http://localhost${FHIR_API_PREFIX}/Patient?_id=456`, {
@@ -257,10 +272,11 @@ describe("Bearer authorization proxy flow", () => {
             tokenVerifier,
             config,
             accessCheckerRegistry: registry,
+            launchContextStore,
         });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
+            jti: "token-3",
             scope: "patient/*.*",
-            [PATIENT_CLAIM]: "456",
         });
 
         const response = await app.handle(
@@ -290,11 +306,16 @@ describe("Bearer authorization proxy flow", () => {
             proxyTo: upstream.baseUrl,
             accessChecker: "patient",
         });
-        const app = createApp({ tokenVerifier, config });
+        const app = createApp({ tokenVerifier, config, launchContextStore });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [PATIENT_CLAIM]: "456",
+            jti: "token-4",
             scope: "patient/Observation.read",
         });
+        await seedLaunchContextForToken(
+            launchContextStore,
+            { subject: "gateway-user", clientId: "test-app", tokenId: "token-4" },
+            { patientId: "456" },
+        );
 
         const response = await app.handle(
             new Request(`http://localhost${FHIR_API_PREFIX}/Observation/enc-1`, {
@@ -312,7 +333,7 @@ describe("Bearer authorization proxy flow", () => {
             proxyTo: upstream.baseUrl,
             accessChecker: "patient",
         });
-        const app = createApp({ tokenVerifier, config });
+        const app = createApp({ tokenVerifier, config, launchContextStore });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
             scope: "user/Observation.read",
         });
@@ -333,7 +354,8 @@ describe("Bearer authorization proxy flow", () => {
             proxyTo: upstream.baseUrl,
             accessChecker: "patient",
         });
-        const app = createApp({ tokenVerifier, config });
+        const app = createApp({ tokenVerifier, config, launchContextStore });
+        // patient scope 但 store 裡沒有綁任何 launch context：授權層必須回 401。
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
             scope: "patient/Patient.read",
         });
@@ -355,7 +377,7 @@ describe("Bearer authorization proxy flow", () => {
             proxyTo: upstream.baseUrl,
             accessChecker: "basic",
         });
-        const app = createApp({ tokenVerifier, config });
+        const app = createApp({ tokenVerifier, config, launchContextStore });
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
             scope: "patient/Patient.read",
         });
@@ -369,21 +391,25 @@ describe("Bearer authorization proxy flow", () => {
         expect(response.status).toBe(200);
     });
 
-    it("uses the trimmed launch-context patient id for the injected patient parameter", async () => {
+    it("uses the launch-context patient id from the store for the injected patient parameter", async () => {
         const config = createBaseConfig({
             tokenIssuer: issuer.issuerUrl,
             proxyTo: upstream.baseUrl,
             accessChecker: "patient",
         });
-        const app = createApp({ tokenVerifier, config });
-        // 有前後空白的 patient claim：注入與 access checker 都讀 trim 後的
-        // LaunchContext.patientId，所以兩者不可能對授權的 patient 不一致。
-        // 這裡回 200（trim 後注入 `Patient/456`）是刻意的，不是「以前也接受」：
-        // 未 trim 前注入的是 Patient/%20%20456%20，會 403。
+        const app = createApp({ tokenVerifier, config, launchContextStore });
+        // launch context store 是病人參照的唯一來源：注入參數與 access checker 都讀同一份
+        // LaunchContext.patientId，因此兩者不可能對「授權的是哪一位病人」不一致。
+        // 空白在註冊端（internal launch API）就已 trim，store 裡存的是乾淨的 id。
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [PATIENT_CLAIM]: " 456 ",
+            jti: "token-6",
             scope: "patient/Observation.read",
         });
+        await seedLaunchContextForToken(
+            launchContextStore,
+            { subject: "gateway-user", clientId: "test-app", tokenId: "token-6" },
+            { patientId: "456" },
+        );
 
         const response = await app.handle(
             new Request(`http://localhost${FHIR_API_PREFIX}/Observation/enc-1`, {
@@ -401,7 +427,7 @@ describe("Bearer authorization proxy flow", () => {
             proxyTo: upstream.baseUrl,
             accessChecker: "basic",
         });
-        const app = createApp({ tokenVerifier, config });
+        const app = createApp({ tokenVerifier, config, launchContextStore });
         // scope 只給 Observation 的權限，卻要求寫 Patient
         const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
             scope: "patient/Observation.read",

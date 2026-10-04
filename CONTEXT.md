@@ -5,7 +5,7 @@
 ## 授權語言
 
 **Launch context**:
-一份由 EHR 在啟動 App 時建立的上下文，描述這次授權「正在處理哪個病人／哪次就診」。它是 patient compartment 裁決的依據，不是 token 內的欄位。
+一份描述這次授權「正在處理哪個病人／哪次就診／哪份病人清單」的上下文，**由 gateway 自己持有**（ADR-0002）：EHR 在 App 開啟前向 gateway 註冊它，gateway 記住內容並管理生命週期，access token 不再攜帶病人資訊——token 被竊取時不直接洩漏 PHI。它是 patient compartment 與 patient list 裁決的依據，不是 token 內的欄位。
 _Avoid_: launch context claim、context claim（指稱 token 內欄位，會誤導）
 
 **Launch id**:
@@ -13,8 +13,11 @@ EHR 建立一份 launch context 時取得的單次 opaque 識別碼，交給 SMA
 _Avoid_: launch token、context id（易與後者混淆）
 
 **綁定點（binding point）**:
-launch id 與已認證使用者被寫成一筆 `(subject, client id) → launch context` 記錄的那一刻。它發生在授權流程進行中，而非授權完成後。
+launch id 與已認證使用者被寫成一筆 `(subject, client id) → launch context` 記錄的那一刻。它發生在 gateway 代理的 authorization flow 的 **callback**——使用者完成認證之後、App 拿到 token 之前——而非授權完成後。
 _Avoid_: context resolution（指稱後續查詢，混淆建立與讀取）
+
+**Launch context 索引鍵**:
+授權裁決時，gateway 認出「這次請求屬於哪一次授權」所使用的鍵。**不是** `(subject, client id)`：gateway 是 token endpoint 上的 OAuth client，access token 的 `azp` 是 gateway 自己，token 裡沒有任何欄位指出是哪個 App。實際的鍵是**這張 access token 自己的 `jti`**，由 gateway 在把 token 交給 App 的那一刻接到綁定上；refresh 換發新 token 時同樣接上，因此 refresh 後仍然解析得到。這讓同一位醫師同時開兩個 App、兩個不同病人時，各自解析到自己的病人。
 
 **Revocation latency**:
 使用者登出後，最後一次被允許的 PHI 存取距發生的時間上限。取決於 IdP 的登出通知能力，不是 TTL 本身。

@@ -8,8 +8,10 @@ import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
 import { AuditEventService } from "../src/services/audit-event.service";
+import { InMemoryLaunchContextStore } from "../src/services/launch-context-store.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
+import { seedLaunchContextForToken } from "./helpers/launch-context-fixture";
 
 type PostCall = {
     resource: fhir4.Resource;
@@ -41,7 +43,8 @@ async function signJwt(issuer: string, privateKey: CryptoKey, claims: Record<str
         .setProtectedHeader({ alg: "RS256" })
         .setIssuer(issuer)
         .setSubject("audit-user")
-        .setJti("jwt-id-1")
+        // `jti` 由 claims 帶入：gateway 靠它找回這張 access token 綁在哪一份 launch context 上。
+        .setJti(claims.jti ?? "jwt-id-1")
         .sign(privateKey);
 }
 
@@ -325,6 +328,7 @@ describe("Audit event proxy integration", () => {
             runMode: "PROD",
             allowTokenIssuerHostMismatch: false,
         });
+        const launchContextStore = new InMemoryLaunchContextStore();
         const app = createApp({
             tokenVerifier,
             config: baseConfig({
@@ -332,12 +336,19 @@ describe("Audit event proxy integration", () => {
                 proxyTo: upstream.baseUrl,
                 auditEventActions: ["R"],
             }),
+            launchContextStore,
         });
         const jwt = await signJwt(issuer.issuerUrl, issuer.keys.privateKey, {
-            patient: "456",
+            jti: "jwt-id-1",
             scope: "patient/Patient.read",
             name: "Audit User",
         });
+        // 病人參照來自 launch context store，token 只帶 `jti` 讓 gateway 找回綁定。
+        await seedLaunchContextForToken(
+            launchContextStore,
+            { subject: "audit-user", clientId: "test-app", tokenId: "jwt-id-1" },
+            { patientId: "456" },
+        );
 
         const response = await app.handle(
             new Request(`http://localhost${FHIR_API_PREFIX}/Patient/456`, {
@@ -358,6 +369,7 @@ describe("Audit event proxy integration", () => {
             runMode: "PROD",
             allowTokenIssuerHostMismatch: false,
         });
+        const launchContextStore = new InMemoryLaunchContextStore();
         const app = createApp({
             tokenVerifier,
             config: baseConfig({
@@ -365,11 +377,17 @@ describe("Audit event proxy integration", () => {
                 proxyTo: upstream.baseUrl,
                 auditEventActions: ["R"],
             }),
+            launchContextStore,
         });
         const jwt = await signJwt(issuer.issuerUrl, issuer.keys.privateKey, {
-            patient: "456",
+            jti: "jwt-id-2",
             scope: "patient/Patient.read",
         });
+        await seedLaunchContextForToken(
+            launchContextStore,
+            { subject: "audit-user", clientId: "test-app", tokenId: "jwt-id-2" },
+            { patientId: "456" },
+        );
 
         const response = await app.handle(
             new Request(`http://localhost${FHIR_API_PREFIX}/Patient/456`, {

@@ -6,10 +6,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
-import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
+import { InMemoryLaunchContextStore } from "../src/services/launch-context-store.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
+import { seedLaunchContextForToken } from "./helpers/launch-context-fixture";
 
 type UpstreamServer = {
     baseUrl: string;
@@ -47,6 +48,12 @@ async function startUpstreamServer(): Promise<UpstreamServer> {
     };
 }
 
+/** 每張 access token 一個 `jti`：gateway 靠它找回這次授權綁的 launch context。 */
+let issuedTokens = 0;
+
+/** 這些測試自簽的 token 都用同一個 `sub`，seed 時必須完全一致。 */
+const ISSUER_SCOPED_SUBJECT = "issuer-policy-user";
+
 type IssuerScopedApp = {
     /** 以指定的 token issuer 發一次受保護的 FHIR 請求 */
     requestPatient(tokenIssuer: string): Promise<Response>;
@@ -80,21 +87,31 @@ async function createIssuerScopedApp(
         runMode,
         allowTokenIssuerHostMismatch,
     });
+    const launchContextStore = new InMemoryLaunchContextStore();
     const app = createApp({
         tokenVerifier,
         config,
         patientFinder: PatientFinderService.getInstance(),
+        launchContextStore,
     });
 
     return {
         requestPatient: async (tokenIssuer: string): Promise<Response> => {
+            // 病人參照來自 launch context store；token 只帶 `jti` 讓 gateway 找回綁定。
+            const jti = `issuer-scoped-token-${++issuedTokens}`;
             const jwt = await new SignJWT({
-                [PATIENT_CLAIM]: "456",
+                jti,
                 scope: "patient/Patient.read",
             })
                 .setProtectedHeader({ alg: "RS256" })
                 .setIssuer(tokenIssuer)
+                .setSubject(ISSUER_SCOPED_SUBJECT)
                 .sign(issuer.keys.privateKey);
+            await seedLaunchContextForToken(
+                launchContextStore,
+                { subject: ISSUER_SCOPED_SUBJECT, clientId: "test-app", tokenId: jti },
+                { patientId: "456" },
+            );
 
             return await app.handle(
                 new Request(`http://localhost${FHIR_API_PREFIX}/Patient/456`, {

@@ -16,7 +16,7 @@ import { AuditEventService } from "./services/audit-event.service";
 import { FhirBackendService } from "./services/fhir-backend.service";
 import { GcpAccessTokenProviderService } from "./services/gcp-access-token-provider.service";
 import { HttpFhirClientService } from "./services/http-fhir-client.service";
-import { defaultLaunchContextProvider } from "./services/launch-context.service";
+import { DefaultLaunchContextProvider } from "./services/launch-context.service";
 import { InMemoryLaunchContextStore } from "./services/launch-context-store.service";
 import { PatientFinderService } from "./services/patient-finder.service";
 import { SmartAuthorizationSessions } from "./services/smart-authorization-sessions.service";
@@ -104,7 +104,8 @@ export const createApp = (options?: CreateAppOptions) => {
             fhirRoute({
                 config,
                 tokenVerifier: options.tokenVerifier,
-                launchContextProvider: options.launchContextProvider ?? defaultLaunchContextProvider,
+                launchContextProvider:
+                    options.launchContextProvider ?? new DefaultLaunchContextProvider(launchContextStore),
                 ...(fhirBackend ? { fhirBackend } : {}),
                 allowedQueries:
                     options.allowedQueries ?? AllowedQueriesCheckerService.loadFromFile(config.allowedQueriesFile),
