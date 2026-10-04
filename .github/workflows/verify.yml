@@ -1,0 +1,42 @@
+name: verify
+
+# 這個 repo 沒有其他 CI。`pnpm run verify`（typecheck + lint + test）是本地的權威檢查，
+# 這裡只是讓它在 PR 邊界上也被跑一次。
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    # launch context store 的 Valkey 測試用 `describe.skipIf(!valkeyAvailable)`：沒有 Valkey
+    # 時它們會安靜地 skip，本地因此看起來一樣綠。這裡把服務拉起來，讓跨重啟與多 instance
+    # 的行為真的被驗證，而不是被跳過。
+    services:
+      valkey:
+        image: valkey/valkey:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # 版本取自 package.json 的 packageManager 欄位，不在這裡另外指定。
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 與 Dockerfile 的 builder stage 一致；vitest 4 要求 ^20 / ^22 / >=24。
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm run verify

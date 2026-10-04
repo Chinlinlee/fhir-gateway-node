@@ -37,8 +37,13 @@ pnpm run verify   # typecheck + lint + test
 
 ## 測試
 
-**唯一的測試 seam 是「整個 app over HTTP」**：用 `createApp` 組出真實 app，配 stub IdP 與
+**預設的測試 seam 是「整個 app over HTTP」**：用 `createApp` 組出真實 app，配 stub IdP 與
 stub FHIR upstream，用 `app.handle(new Request(...))` 驅動，斷言 status code 與 response。
+
+**已知的例外是 launch context store 介面**（ADR-0002）：bind、依 access token 回讀、TTL 到期
+這些行為在 gateway 進 authorization flow 之前無法經 HTTP 觀察，所以 store 介面是刻意保留的
+第二個 seam。它的測試是窄測試，斷言 store 介面自己的行為而不是 HTTP 結果——這是例外，不是
+可以隨手擴張的先例。新增 seam 前先更新 `tests/README.md`。
 
 好的測試斷言可觀察行為。壞的測試斷言：某個 resolver 有被呼叫、某個 DTO 有某個欄位、
 某個常數的字串值，或在只有 status code 有意義時去斷言錯誤訊息逐字相符。
@@ -59,6 +64,12 @@ Issues 與 specs 存在本 repo 的 GitHub Issues，用 `gh` CLI 操作。細節
 不要默默推翻它。**
 
 詳細說明見 `docs/agents/domain.md`。
+
+## Codebase map
+
+**動工前先讀 `docs/agents/codebase-map.md`** — 模組邊界、`app.ts` 裡的條件式路由註冊與隱藏
+耦合、錯誤到 status 的對應、以及新增設定項要動的四處。那裡的耦合（共用 store instance、
+backend 建立的雙重條件）從檔名看不出來，grep 找不出來。
 
 ## 開發慣例
 
