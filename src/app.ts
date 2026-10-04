@@ -35,8 +35,12 @@ export type CreateAppOptions = {
     fhirBackend?: FhirBackendService;
     auditEventService?: AuditEventService;
     /**
-     * Launch context store；省略時由 app 建立 in-memory 實作。測試與單機開發用同一條 pipeline。
-     * Injectable launch context store; defaults to the in-memory implementation.
+     * Launch context store。
+     *
+     * 省略時建立 in-memory 實作：**測試與單機開發用的預設值，不適合正式環境**（重啟會失去
+     * 綁定、多個 instance 互相看不見）。正式部署由 `createLaunchContextStore(config)`
+     * 依 `LAUNCH_CONTEXT_STORE` 建立並注入。
+     * Defaults to the in-memory implementation, which is not suitable for production.
      */
     launchContextStore?: LaunchContextStore;
 };

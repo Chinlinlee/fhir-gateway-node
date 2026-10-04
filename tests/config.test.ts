@@ -149,4 +149,35 @@ describe("loadGatewayConfig", () => {
             ),
         ).toThrow(/GATEWAY_CLIENT_SECRET/);
     });
+
+    it("keeps the launch context store in memory unless an operator asks for another one", () => {
+        const config = loadGatewayConfig(minimalValidEnv());
+
+        expect(config.launchContextStoreType).toBe("memory");
+        expect(config.launchContextValkeyUrl).toBeUndefined();
+    });
+
+    it("parses LAUNCH_CONTEXT_STORE", () => {
+        const config = loadGatewayConfig(
+            minimalValidEnv({
+                LAUNCH_CONTEXT_STORE: "valkey",
+                LAUNCH_CONTEXT_VALKEY_URL: "rediss://gateway:shhh@valkey.internal:6379",
+            }),
+        );
+
+        expect(config.launchContextStoreType).toBe("valkey");
+        expect(config.launchContextValkeyUrl).toBe("rediss://gateway:shhh@valkey.internal:6379");
+    });
+
+    it("throws on invalid LAUNCH_CONTEXT_STORE", () => {
+        expect(() => loadGatewayConfig(minimalValidEnv({ LAUNCH_CONTEXT_STORE: "postgres" }))).toThrow(
+            /LAUNCH_CONTEXT_STORE/,
+        );
+    });
+
+    it("throws naming the missing URL when the valkey store is selected without one", () => {
+        expect(() => loadGatewayConfig(minimalValidEnv({ LAUNCH_CONTEXT_STORE: "valkey" }))).toThrow(
+            /LAUNCH_CONTEXT_VALKEY_URL/,
+        );
+    });
 });

@@ -1,16 +1,24 @@
-import type { AuditEventActionCode, BackendType, RunMode, SigningKeySource } from "../constants/config";
+import type {
+    AuditEventActionCode,
+    BackendType,
+    LaunchContextStoreType,
+    RunMode,
+    SigningKeySource,
+} from "../constants/config";
 
 import {
     AUDIT_EVENT_ACTION_CODES,
     BUILTIN_ACCESS_CHECKERS,
     DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH,
     DEFAULT_INTERNAL_LAUNCH_API_ENABLED,
+    DEFAULT_LAUNCH_CONTEXT_STORE,
     DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS,
     DEFAULT_PORT,
     DEFAULT_RUN_MODE,
     DEFAULT_SIGNING_KEY_SOURCE,
     DEFAULT_WELL_KNOWN_ENDPOINT,
     ENV_KEYS,
+    LAUNCH_CONTEXT_STORE_TYPES,
     SIGNING_KEY_SOURCES,
 } from "../constants/config";
 
@@ -132,6 +140,43 @@ function parseLaunchContextTtlSeconds(raw: string | undefined): number {
 }
 
 /**
+ * launch context store 的實作選擇。空字串等同未設定，因此 `LAUNCH_CONTEXT_STORE=` 走預設值
+ * 而不是報錯——`env.example` 裡那行就是空的。
+ */
+function parseLaunchContextStoreType(raw: string | undefined): LaunchContextStoreType {
+    const value = raw?.trim().toLowerCase();
+    if (value === undefined || value.length === 0) {
+        return DEFAULT_LAUNCH_CONTEXT_STORE;
+    }
+    if (LAUNCH_CONTEXT_STORE_TYPES.includes(value as LaunchContextStoreType)) {
+        return value as LaunchContextStoreType;
+    }
+    throw new ConfigError(
+        `The environment variable ${ENV_KEYS.LAUNCH_CONTEXT_STORE} must be memory or valkey (got: ${raw})`,
+    );
+}
+
+/**
+ * Valkey 連線 URL。選了 valkey 卻沒給 URL，gateway 啟動時無從連線，而 store 故障對
+ * patient／list 模式等同 401——因此這裡在啟動期就失敗並指名環境變數，與 IdP 的處理一致。
+ */
+function parseLaunchContextValkeyUrl(raw: string | undefined, storeType: LaunchContextStoreType): string | undefined {
+    const url = raw?.trim();
+
+    if (storeType !== "valkey") {
+        return undefined;
+    }
+
+    if (url === undefined || url.length === 0) {
+        throw new ConfigError(
+            `The environment variable ${ENV_KEYS.LAUNCH_CONTEXT_VALKEY_URL} must be set when ${ENV_KEYS.LAUNCH_CONTEXT_STORE} is valkey!`,
+        );
+    }
+
+    return url;
+}
+
+/**
  * 內部 launch context 端點的憑證必須在端點啟用時存在：端點一旦啟用卻沒有認證，
  * 等於對外開了一個任何人都能註冊 PHI 的入口。啟動即失敗並指名環境變數，
  * 讓 operator 不用從 log 猜哪個變數漏了。
@@ -240,6 +285,12 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
 
     const launchContextTtlSeconds = parseLaunchContextTtlSeconds(env[ENV_KEYS.LAUNCH_CONTEXT_TTL_SECONDS]);
 
+    const launchContextStoreType = parseLaunchContextStoreType(env[ENV_KEYS.LAUNCH_CONTEXT_STORE]);
+    const launchContextValkeyUrl = parseLaunchContextValkeyUrl(
+        env[ENV_KEYS.LAUNCH_CONTEXT_VALKEY_URL],
+        launchContextStoreType,
+    );
+
     // 端點改寫絕不從請求的 Host 推導：operator 設定的 base URL 是唯一權威來源。
     const gatewayPublicBaseUrl = env[ENV_KEYS.GATEWAY_PUBLIC_BASE_URL]?.trim();
     const { gatewayClientId, gatewayClientSecret } = parseGatewayIdpClientCredentials(
@@ -270,6 +321,8 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
         ...(internalLaunchApiCredential ? { internalLaunchApiCredential } : {}),
         internalLaunchApiEnabled,
         launchContextTtlSeconds,
+        launchContextStoreType,
+        ...(launchContextValkeyUrl ? { launchContextValkeyUrl } : {}),
         ...(gatewayPublicBaseUrl ? { gatewayPublicBaseUrl } : {}),
         ...(gatewayClientId && gatewayClientSecret ? { gatewayClientId, gatewayClientSecret } : {}),
     };

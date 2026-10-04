@@ -6,6 +6,7 @@ import type {
     CreateLaunchContextInput,
     LaunchContextStore,
 } from "../types/launch-context-store";
+import { launchContextBindingKey } from "./launch-context-store-key";
 
 /** launch id 的位元組長度；base64url 後 43 個字元，不含任何可推導的結構。 */
 const LAUNCH_ID_BYTES = 32;
@@ -18,16 +19,15 @@ type UnboundRecord = {
 };
 
 /**
- * `(subject, client id)` 索引鍵的分隔符；用 IdP 不會發出的控制字元，避免拼接歧義
- * （"ab"+"c" 與 "a"+"bc" 不能撞成同一筆）。
- */
-const BINDING_KEY_SEPARATOR = "\u0000";
-
-/**
  * In-memory 的 launch context store：供測試與單機開發使用，讓測試不必依賴
- * Valkey 或 docker。正式環境的 Valkey 實作會走同一條介面。
+ * Valkey 或 docker。正式環境的 Valkey 實作走同一條介面。
  *
  * In-memory store used by tests and single-machine development; no docker required.
+ *
+ * **不適合正式環境**：綁定只活在這個 process 的記憶體裡——gateway 重啟會讓所有進行中的
+ * launch 全部失效，多個 instance 之間也看不到彼此的綁定。正式環境請設
+ * `LAUNCH_CONTEXT_STORE=valkey`（見 `ValkeyLaunchContextStore`）。
+ * Not for production: bindings die with the process and are invisible to other instances.
  */
 export class InMemoryLaunchContextStore implements LaunchContextStore {
     private readonly unbound = new Map<string, UnboundRecord>();
@@ -77,7 +77,7 @@ export class InMemoryLaunchContextStore implements LaunchContextStore {
             return undefined;
         }
 
-        const key = bindingKey(subject, clientId);
+        const key = launchContextBindingKey(subject, clientId);
         // 單次可用：launch id 已經綁給這組鍵時，既有綁定不動。
         if (this.bound.has(key)) {
             return undefined;
@@ -99,7 +99,7 @@ export class InMemoryLaunchContextStore implements LaunchContextStore {
     }
 
     async attachAccessToken(tokenId: string, subject: string, clientId: string): Promise<void> {
-        const key = bindingKey(subject, clientId);
+        const key = launchContextBindingKey(subject, clientId);
         // 沒有綁定就不接：沒有綁定的 access token 在授權層本來就會被拒絕。
         if (this.bound.has(key)) {
             this.accessTokens.set(tokenId, key);
@@ -112,11 +112,11 @@ export class InMemoryLaunchContextStore implements LaunchContextStore {
     }
 
     async get(subject: string, clientId: string): Promise<BoundLaunchContext | undefined> {
-        return this.bound.get(bindingKey(subject, clientId));
+        return this.bound.get(launchContextBindingKey(subject, clientId));
     }
 
     async delete(subject: string, clientId: string): Promise<boolean> {
-        const key = bindingKey(subject, clientId);
+        const key = launchContextBindingKey(subject, clientId);
         const deleted = this.bound.delete(key);
         // 綁定消失時，已接上去的 access token 必須跟著失效：索引指向不存在的綁定等於查無。
         for (const [tokenId, boundKey] of this.accessTokens) {
@@ -126,8 +126,4 @@ export class InMemoryLaunchContextStore implements LaunchContextStore {
         }
         return deleted;
     }
-}
-
-function bindingKey(subject: string, clientId: string): string {
-    return `${subject}${BINDING_KEY_SEPARATOR}${clientId}`;
 }
