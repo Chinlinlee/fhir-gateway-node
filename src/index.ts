@@ -3,6 +3,7 @@ import { createApp } from "./app";
 import { loadGatewayConfig } from "./configs";
 import { ENV_KEYS } from "./constants/config";
 import { StartupConnectionError } from "./errors/startup-connection.error";
+import { createLaunchContextStore } from "./services/launch-context-store-factory.service";
 import { TokenVerifierService } from "./services/token-verifier.service";
 
 async function main(): Promise<void> {
@@ -26,7 +27,11 @@ async function main(): Promise<void> {
         tokenAudience: config.tokenAudience,
     });
 
-    createApp({ tokenVerifier, config }).listen(config.port, ({ hostname, port }) => {
+    // launch context store 在 IdP 之前連線：它決定的是「這次請求屬於哪一位病人」，
+    // 連不上時 patient／list 模式只能拒絕，因此啟動就該失敗。
+    const launchContextStore = await createLaunchContextStore(config);
+
+    createApp({ tokenVerifier, config, launchContextStore }).listen(config.port, ({ hostname, port }) => {
         console.log(`FHIR Gateway is running at http://${hostname}:${port}`);
     });
 }

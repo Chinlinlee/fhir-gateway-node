@@ -328,6 +328,8 @@ cp env.example .env
 - `INTERNAL_LAUNCH_API_ENABLED`：`true` 時啟用 EHR 面向的內部 launch context 端點（預設 `false`）。**`ACCESS_CHECKER=patient` 或 `list` 時這是必要條件**——launch context 由 gateway 自己持有，EHR 不註冊就沒有病人參照。見 [內部 Launch Context 端點](#內部-launch-context-端點)
 - `INTERNAL_LAUNCH_API_CREDENTIAL`：內部端點的認證憑證。`INTERNAL_LAUNCH_API_ENABLED=true` 而未設定時，gateway **啟動即失敗**並指名這個變數
 - `LAUNCH_CONTEXT_TTL_SECONDS`：未綁定 launch context 的存活秒數（預設 `600`）。只管**綁定前**那一段；綁定後的生命週期目前由 gateway 自管，尚無 TTL（見 ADR-0004）
+- `LAUNCH_CONTEXT_STORE`：`memory`（預設，測試／單機開發）或 `valkey`（正式環境的預期選擇）。`RUN_MODE=PROD` 搭配 `memory` 時 gateway 啟動會明確警告它不適合正式環境。見 [Launch Context Store（Valkey）](#launch-context-storevalkey)
+- `LAUNCH_CONTEXT_VALKEY_URL`：Valkey 連線 URL（`rediss://<user>:<password>@<host>:6379`）。`LAUNCH_CONTEXT_STORE=valkey` 而未設定時，gateway **啟動即失敗**並指名這個變數。見 [Launch Context Store（Valkey）](#launch-context-storevalkey)
 - `GATEWAY_PUBLIC_BASE_URL`：gateway 對外可被 SMART App 呼叫的 base URL。設定它等同啟用代理的 SMART authorization flow（留空 = 不代理，維持被動）。**留空時沒有任何綁定會發生，`ACCESS_CHECKER=patient`／`list` 的請求一律 401**——這是 ADR-0002 硬切的結果，不是可選擇的降級。見 [SMART Authorization Flow 代理](#smart-authorization-flow-代理)
 - `GATEWAY_CLIENT_ID`：gateway 自己當 IdP client 的 client id。設定 `GATEWAY_PUBLIC_BASE_URL` 而缺任一項時，gateway **啟動即失敗**並指名該變數
 - `GATEWAY_CLIENT_SECRET`：對應的 client secret
@@ -401,11 +403,59 @@ curl -X POST http://localhost:3000/internal/launch-contexts \
 ### 儲存
 
 launch context 存放在一個窄介面（`LaunchContextStore`，`src/types/launch-context-store.ts`）後面，
-目前提供 in-memory 實作供測試與單機開發使用，不需要 docker 或外部服務；實作可在 app 建構時
-以 `createApp({ launchContextStore })` 注入。正式環境的 Valkey 實作見後續票。
+實作由 `LAUNCH_CONTEXT_STORE` 選擇，兩種實作共用同一組方法：
+
+- `memory`（`InMemoryLaunchContextStore`）：預設，供測試與單機開發，不需要 docker 或外部服務。
+- `valkey`（`ValkeyLaunchContextStore`）：**正式環境的預期選擇**，見下一節。
+
+測試與 app 建構時也可以直接注入：`createApp({ launchContextStore })`。
 
 launch context 的**內容**由這裡決定（`patientId` 或 `patientListId` 二擇一），授權層在裁決時
 從 store 讀回來。access token 裡沒有病人資訊。
+
+## Launch Context Store（Valkey）
+
+`LAUNCH_CONTEXT_STORE=valkey` 之後，launch context 的綁定存在 Valkey 而不是 gateway process 的
+記憶體裡，因此：
+
+- **gateway 重啟不會讓進行中的 launch 失效**——正在處理病人的醫師不會在部署後突然拿到 401。
+- **多個 gateway instance 看得見彼此的綁定**。一位醫師同時開兩個 App 時，兩個 App 的請求可以
+  落在不同 instance 上，各自靠 `(subject, client id)` 索引解析到自己的病人。
+
+```bash
+LAUNCH_CONTEXT_STORE=valkey
+LAUNCH_CONTEXT_VALKEY_URL=rediss://gateway:<password>@valkey.internal:6379
+```
+
+### 正式環境的前提：TLS 與認證
+
+**store 裡暫時放著 IdP 的 token。** 綁定完成之後，gateway 會寫入一組「這張 access token（以
+`jti` 指認）屬於哪一次授權」的索引；靠它，FHIR 請求時 gateway 才能找回這次授權綁的是哪位病人
+（ADR-0002 為什麼用 `jti` 而不是 `(sub, azp)`）。同一個 store 裡還有病人與就診參照（PHI）。
+因此 store 的連線本身就是 PHI 與憑證的傳輸路徑，**正式環境必須加密且有認證**：
+
+- 用 `rediss://`（TLS），不要用明文的 `redis://`。
+- 用專屬帳號並設密碼，不要用無認證的 store。
+- 不要把 store 暴露在跨網段的網路上。
+
+gateway 在啟動時連線；連不上就**啟動失敗並指名 `LAUNCH_CONTEXT_VALKEY_URL`**，行為與連不上的
+IdP 一致。
+
+### store 不可達時的行為
+
+Valkey 不可達時，**patient 與 list 模式一律 401**，不會退化為「沒有病人限制」——那會讓一次填滿或
+維護變成一個安靜的越權開關（ADR-0002）。不需要 launch context 的模式（`basic`、allowed queries、
+scope 合併檢查）照常服務。
+
+### 本機試跑
+
+```bash
+docker run -d --name valkey -p 6379:6379 valkey/valkey:8-alpine
+LAUNCH_CONTEXT_STORE=valkey LAUNCH_CONTEXT_VALKEY_URL=redis://127.0.0.1:6379 pnpm dev
+```
+
+這條 `redis://` 只適合本機。測試套件預設不依賴 Valkey（沒有 Valkey 時相關測試會跳過），
+要跑真實 store 的那一組見 `tests/README.md`。
 
 ## SMART Authorization Flow 代理
 

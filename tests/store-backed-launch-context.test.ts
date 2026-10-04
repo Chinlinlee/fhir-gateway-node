@@ -1,13 +1,9 @@
-import { createHash } from "node:crypto";
-import { createServer, type Server } from "node:http";
-
 import { type CryptoKey, decodeJwt, SignJWT } from "jose";
-import { fetch as undiciFetch } from "undici";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { type App, createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
-import { FHIR_API_PREFIX, SMART_API_PREFIX, SMART_AUTHORIZE_PATH, SMART_TOKEN_PATH } from "../src/constants/routes";
+import { FHIR_API_PREFIX } from "../src/constants/routes";
 import { INTERNAL_CREDENTIAL_HEADER } from "../src/controllers/internal-launch/internal-launch.controller";
 import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
 import { InMemoryLaunchContextStore } from "../src/services/launch-context-store.service";
@@ -16,151 +12,36 @@ import { TokenVerifierService } from "../src/services/token-verifier.service";
 import type { LaunchContextStore } from "../src/types/launch-context-store";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
 import { seedLaunchContextForToken, unreachableLaunchContextStore } from "./helpers/launch-context-fixture";
+import {
+    APP_CLIENT_ID,
+    APP_REDIRECT_URI,
+    AUTHORIZED_PATIENT,
+    authenticateAtIdp,
+    authorizeParams,
+    CODE_VERIFIER,
+    createBaseConfig,
+    GATEWAY_BASE_URL,
+    GATEWAY_IDP_CLIENT_ID,
+    GATEWAY_IDP_CLIENT_SECRET,
+    gatewayAuthorize,
+    gatewayToken,
+    INTERNAL_CREDENTIAL,
+    locationOf,
+    OTHER_APP_CLIENT_ID,
+    OTHER_PATIENT,
+    PATIENT_LIST_ID,
+    startUpstreamServer,
+    type UpstreamServer,
+} from "./helpers/launch-flow-fixture";
 
 /**
  * launch context 改由 gateway 持有之後，access token 不再帶任何病人資訊。
  * 這些測試走整個 app over HTTP，並且走完整的 SMART 授權流程，讓綁定真的由 gateway 寫進
  * store——測試不會自己塞一份 DTO 進去。
+ *
+ * 這裡的 store 是 in-memory 的；同一條路徑對真實 Valkey 的驗證在
+ * `valkey-launch-context-store.test.ts`。
  */
-
-const GATEWAY_BASE_URL = "https://gateway.example";
-const APP_CLIENT_ID = "smart-app-client";
-const OTHER_APP_CLIENT_ID = "other-smart-app-client";
-const APP_REDIRECT_URI = "https://app.example/callback";
-const APP_STATE = "app-state-0S6_WzA2Mj";
-const GATEWAY_IDP_CLIENT_ID = "gateway-idp-client";
-const GATEWAY_IDP_CLIENT_SECRET = "gateway-idp-client-secret";
-const INTERNAL_CREDENTIAL = "ehr-internal-credential";
-const CODE_VERIFIER = "sBQnbpC_DdE9KZ1TLJKqzKvHqGHvVv0nQrTvVWkGWU8a";
-const CODE_CHALLENGE = createHash("sha256").update(CODE_VERIFIER).digest("base64url");
-const AUTHORIZED_PATIENT = "456";
-const OTHER_PATIENT = "789";
-const PATIENT_LIST_ID = "patient-list-1";
-const PATIENT_LIST_MEMBERS = [`Patient/${AUTHORIZED_PATIENT}`];
-
-type UpstreamServer = {
-    baseUrl: string;
-    /** upstream 收到的 `patient` 搜尋參數；patient mode 會由 gateway 注入。 */
-    patientSearchParams: string[];
-    close: () => Promise<void>;
-};
-
-/** stub FHIR upstream：Patient 讀取、Observation search 與 patient list 的 allow-list。 */
-async function startUpstreamServer(): Promise<UpstreamServer> {
-    const patientSearchParams: string[] = [];
-    const server: Server = createServer((req, res) => {
-        const url = new URL(req.url ?? "/", "http://127.0.0.1");
-
-        if (req.method === "GET" && /^\/fhir\/Patient\/[^/]+$/.test(url.pathname)) {
-            const id = url.pathname.replace("/fhir/Patient/", "");
-            res.writeHead(200, { "content-type": "application/fhir+json" });
-            res.end(JSON.stringify({ resourceType: "Patient", id }));
-            return;
-        }
-
-        if (req.method === "GET" && url.pathname === "/fhir/Observation") {
-            const requested = url.searchParams.getAll("patient");
-            patientSearchParams.push(...requested);
-            res.writeHead(200, { "content-type": "application/fhir+json" });
-            res.end(JSON.stringify({ resourceType: "Bundle", total: 0, entry: [] }));
-            return;
-        }
-
-        // patient list launch 的 allow-list：只有清單裡的病人算數。
-        if (req.method === "GET" && url.pathname === "/fhir/List") {
-            const requestedItems = url.searchParams.getAll("item").flatMap((value) => value.split(","));
-            const list = url.searchParams.getAll("_id").includes(PATIENT_LIST_ID);
-            const allInList = requestedItems.every((item) => PATIENT_LIST_MEMBERS.includes(item));
-            const entries = list && allInList ? [{ resource: { resourceType: "List", id: PATIENT_LIST_ID } }] : [];
-            res.writeHead(200, { "content-type": "application/fhir+json" });
-            res.end(JSON.stringify({ resourceType: "Bundle", total: entries.length, entry: entries }));
-            return;
-        }
-
-        res.writeHead(404, { "content-type": "application/fhir+json" });
-        res.end(JSON.stringify({ resourceType: "OperationOutcome" }));
-    });
-
-    await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", () => resolve());
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-        throw new Error("Unable to bind upstream test server");
-    }
-
-    return {
-        patientSearchParams,
-        baseUrl: `http://127.0.0.1:${address.port}/fhir`,
-        close: () =>
-            new Promise<void>((resolve, reject) => {
-                server.close((error) => (error ? reject(error) : resolve()));
-            }),
-    };
-}
-
-function createBaseConfig(overrides: Partial<GatewayConfig>): GatewayConfig {
-    return {
-        proxyTo: "http://127.0.0.1:0/fhir",
-        tokenIssuer: "http://token-issuer",
-        backendType: "HAPI",
-        accessChecker: "patient",
-        auditEventActions: [],
-        wellKnownEndpoint: "test",
-        runMode: "PROD",
-        allowTokenIssuerHostMismatch: false,
-        port: 3000,
-        gatewayPublicBaseUrl: GATEWAY_BASE_URL,
-        gatewayClientId: GATEWAY_IDP_CLIENT_ID,
-        gatewayClientSecret: GATEWAY_IDP_CLIENT_SECRET,
-        internalLaunchApiEnabled: true,
-        internalLaunchApiCredential: INTERNAL_CREDENTIAL,
-        launchContextTtlSeconds: 600,
-        ...overrides,
-    };
-}
-
-function authorizeParams(launch: string, overrides: Record<string, string> = {}): URLSearchParams {
-    return new URLSearchParams({
-        response_type: "code",
-        client_id: APP_CLIENT_ID,
-        redirect_uri: APP_REDIRECT_URI,
-        scope: "launch/patient patient/Patient.read patient/Observation.read openid fhirUser",
-        aud: "https://fhir.example",
-        launch,
-        nonce: "n-0S6_WzA2Mj",
-        state: APP_STATE,
-        code_challenge: CODE_CHALLENGE,
-        code_challenge_method: "S256",
-        ...overrides,
-    });
-}
-
-function gatewayAuthorize(params: URLSearchParams): Request {
-    return new Request(`${GATEWAY_BASE_URL}${SMART_API_PREFIX}${SMART_AUTHORIZE_PATH}?${params.toString()}`, {
-        redirect: "manual",
-    });
-}
-
-function gatewayToken(form: Record<string, string>): Request {
-    return new Request(`${GATEWAY_BASE_URL}${SMART_API_PREFIX}${SMART_TOKEN_PATH}`, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams(form).toString(),
-    });
-}
-
-async function locationOf(response: Response): Promise<URL> {
-    expect(response.status).toBe(302);
-    const location = response.headers.get("location");
-    expect(location).not.toBeNull();
-    return new URL(location ?? "");
-}
-
-async function authenticateAtIdp(idpRedirect: URL): Promise<URL> {
-    const response = await undiciFetch(idpRedirect, { redirect: "manual" });
-    return locationOf(response);
-}
 
 describe("launch context owned by the gateway, over the app seam", () => {
     let issuer: IssuerTestServer;
