@@ -2,9 +2,11 @@ import { node } from "@elysia/node";
 import { Elysia } from "elysia";
 
 import type { GatewayConfig } from "./configs/env.schema";
+import { DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS } from "./constants/config";
 import { corsPlugin } from "./middlewares/cors";
 import { fhirRoute } from "./routes/fhir.route";
 import { healthRoute } from "./routes/health.route";
+import { internalLaunchRoute } from "./routes/internal-launch.route";
 import { wellKnownRoute } from "./routes/well-known.route";
 import type { AccessCheckerRegistryService } from "./services/access-checker-registry.service";
 import { createDefaultAccessCheckerRegistry } from "./services/access-checker-registry.service";
@@ -14,9 +16,11 @@ import { FhirBackendService } from "./services/fhir-backend.service";
 import { GcpAccessTokenProviderService } from "./services/gcp-access-token-provider.service";
 import { HttpFhirClientService } from "./services/http-fhir-client.service";
 import { defaultLaunchContextProvider } from "./services/launch-context.service";
+import { InMemoryLaunchContextStore } from "./services/launch-context-store.service";
 import { PatientFinderService } from "./services/patient-finder.service";
 import type { TokenVerifierService } from "./services/token-verifier.service";
 import type { LaunchContextProvider } from "./types/launch-context";
+import type { LaunchContextStore } from "./types/launch-context-store";
 
 export type CreateAppOptions = {
     tokenVerifier?: TokenVerifierService;
@@ -28,11 +32,28 @@ export type CreateAppOptions = {
     httpFhirClient?: HttpFhirClientService;
     fhirBackend?: FhirBackendService;
     auditEventService?: AuditEventService;
+    /**
+     * Launch context store；省略時由 app 建立 in-memory 實作。測試與單機開發用同一條 pipeline。
+     * Injectable launch context store; defaults to the in-memory implementation.
+     */
+    launchContextStore?: LaunchContextStore;
 };
 
 export const createApp = (options?: CreateAppOptions) => {
     const app = new Elysia({ adapter: node() }).use(corsPlugin).use(healthRoute);
     const gcpTokenProvider = options?.config?.backendType === "GCP" ? new GcpAccessTokenProviderService() : null;
+
+    // 內部 launch context 端點的認證獨立於 patient-facing bearer token，因此它的註冊
+    // 不依賴 tokenVerifier：EHR 服務帳號在 App 開啟前就該能註冊一次 launch。
+    if (options?.config?.internalLaunchApiEnabled === true && options.config.internalLaunchApiCredential) {
+        app.use(
+            internalLaunchRoute({
+                credential: options.config.internalLaunchApiCredential,
+                ttlSeconds: options.config.launchContextTtlSeconds ?? DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS,
+                store: options.launchContextStore ?? new InMemoryLaunchContextStore(),
+            }),
+        );
+    }
 
     if (options?.tokenVerifier) {
         app.use(wellKnownRoute(options.tokenVerifier));

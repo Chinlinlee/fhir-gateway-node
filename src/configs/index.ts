@@ -4,6 +4,8 @@ import {
     AUDIT_EVENT_ACTION_CODES,
     BUILTIN_ACCESS_CHECKERS,
     DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH,
+    DEFAULT_INTERNAL_LAUNCH_API_ENABLED,
+    DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS,
     DEFAULT_PORT,
     DEFAULT_RUN_MODE,
     DEFAULT_SIGNING_KEY_SOURCE,
@@ -109,6 +111,47 @@ function parseTokenAudience(raw: string | undefined): string[] | undefined {
     return values.length > 0 ? values : undefined;
 }
 
+/**
+ * 解析未綁定 launch context 的 TTL（秒）。launch id 在被綁定之前只在這段時間內有效，
+ * 過期後 `authorize` 帶著它進來時一律視為不存在。
+ */
+function parseLaunchContextTtlSeconds(raw: string | undefined): number {
+    const value = raw?.trim();
+    if (value === undefined || value.length === 0) {
+        return DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS;
+    }
+
+    const ttl = Number.parseInt(value, 10);
+    if (!Number.isInteger(ttl) || ttl < 1) {
+        throw new ConfigError(
+            `The environment variable ${ENV_KEYS.LAUNCH_CONTEXT_TTL_SECONDS} must be a positive integer number of seconds (got: ${raw})`,
+        );
+    }
+
+    return ttl;
+}
+
+/**
+ * 內部 launch context 端點的憑證必須在端點啟用時存在：端點一旦啟用卻沒有認證，
+ * 等於對外開了一個任何人都能註冊 PHI 的入口。啟動即失敗並指名環境變數，
+ * 讓 operator 不用從 log 猜哪個變數漏了。
+ */
+function parseInternalLaunchApiCredential(raw: string | undefined, enabled: boolean): string | undefined {
+    const credential = raw?.trim();
+
+    if (!enabled) {
+        return undefined;
+    }
+
+    if (credential === undefined || credential.length === 0) {
+        throw new ConfigError(
+            `The environment variable ${ENV_KEYS.INTERNAL_LAUNCH_API_CREDENTIAL} must be set when ${ENV_KEYS.INTERNAL_LAUNCH_API_ENABLED} is true!`,
+        );
+    }
+
+    return credential;
+}
+
 function validateAccessChecker(accessChecker: string, runMode: RunMode): void {
     if (accessChecker === "permissive" && runMode !== "DEV") {
         // 僅開發模式允許
@@ -150,6 +193,19 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
 
     const tokenAudience = parseTokenAudience(env[ENV_KEYS.TOKEN_AUDIENCE]);
 
+    const internalLaunchApiEnabled = parseBooleanEnv(
+        env[ENV_KEYS.INTERNAL_LAUNCH_API_ENABLED],
+        ENV_KEYS.INTERNAL_LAUNCH_API_ENABLED,
+        DEFAULT_INTERNAL_LAUNCH_API_ENABLED,
+    );
+    // 憑證檢查在解析層完成：啟用而未設定憑證的部署必須在啟動時就失敗，而不是等第一個請求。
+    const internalLaunchApiCredential = parseInternalLaunchApiCredential(
+        env[ENV_KEYS.INTERNAL_LAUNCH_API_CREDENTIAL],
+        internalLaunchApiEnabled,
+    );
+
+    const launchContextTtlSeconds = parseLaunchContextTtlSeconds(env[ENV_KEYS.LAUNCH_CONTEXT_TTL_SECONDS]);
+
     const portRaw = env[ENV_KEYS.PORT]?.trim();
     const port = portRaw ? Number.parseInt(portRaw, 10) : DEFAULT_PORT;
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -169,6 +225,9 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
         port,
         ...(allowedQueriesFile ? { allowedQueriesFile } : {}),
         ...(tokenAudience ? { tokenAudience } : {}),
+        ...(internalLaunchApiCredential ? { internalLaunchApiCredential } : {}),
+        internalLaunchApiEnabled,
+        launchContextTtlSeconds,
     };
 
     const result = GatewayConfigSchema.safeParse(candidate);

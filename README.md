@@ -304,6 +304,74 @@ cp env.example .env
 - `WELL_KNOWN_ENDPOINT`：預設 `.well-known/openid-configuration`
 - `ALLOWED_QUERIES_FILE`：Allowed Queries JSON 檔案路徑（見下方 [Allowed Queries 設定檔](#allowed-queries-設定檔)）
 - `AUDIT_EVENT_ACTIONS_CONFIG`：AuditEvent action code 字串（例如 `CRUDE`）
+- `INTERNAL_LAUNCH_API_ENABLED`：`true` 時啟用 EHR 面向的內部 launch context 端點（預設 `false`）。見 [內部 Launch Context 端點](#內部-launch-context-端點)
+- `INTERNAL_LAUNCH_API_CREDENTIAL`：內部端點的認證憑證。`INTERNAL_LAUNCH_API_ENABLED=true` 而未設定時，gateway **啟動即失敗**並指名這個變數
+- `LAUNCH_CONTEXT_TTL_SECONDS`：未綁定 launch context 的存活秒數（預設 `600`）
+
+## 內部 Launch Context 端點
+
+EHR 在「從某位病人的頁面開啟 SMART App」之前，先告訴 gateway「這次 launch 關於哪個病人／哪次就診」，
+取得一個 launch id，之後當 SMART App `authorize` 請求的 `launch` 參數。gateway 擁有這份
+launch context（見 `docs/adr/0002-launch-context-owned-by-gateway.md`），EHR 只負責描述它。
+
+### 啟用
+
+```bash
+INTERNAL_LAUNCH_API_ENABLED=true
+INTERNAL_LAUNCH_API_CREDENTIAL=<醫院 EHR 服務帳號的內部憑證>
+LAUNCH_CONTEXT_TTL_SECONDS=600
+```
+
+`INTERNAL_LAUNCH_API_ENABLED=true` 而 `INTERNAL_LAUNCH_API_CREDENTIAL` 未設定時，gateway **啟動即失敗**，
+訊息中指名 `INTERNAL_LAUNCH_API_CREDENTIAL`。端點一旦啟用卻沒有認證，等於對外開了一個任何人都能
+註冊 PHI 的入口，因此這裡選擇啟動失敗而不是讓第一個請求才發現。
+
+### 認證方式（與 patient-facing bearer token 分開）
+
+認證走自己的 request header，而不是 `Authorization: Bearer`：
+
+```
+X-Internal-Credential: <INTERNAL_LAUNCH_API_CREDENTIAL>
+```
+
+這樣醫院的 EHR 服務帳號與臨床使用者的憑證不會混在一起：clinical user 的 access token
+帶到這個端點一律 401，EHR 的內部憑證也不在任何 patient-facing 的授權路徑上被接受。
+憑證以 SHA-256 雜湊後定長比較（`timingSafeEqual`），不回應差異。
+
+### 呼叫範例
+
+```bash
+curl -X POST http://localhost:3000/internal/launch-contexts \
+  -H 'content-type: application/json' \
+  -H "X-Internal-Credential: ${INTERNAL_LAUNCH_API_CREDENTIAL}" \
+  -d '{"patientId":"456","encounterId":"enc-1"}'
+```
+
+`patientId` 必要，`encounterId` 選填。回應 `201`：
+
+```json
+{
+  "launchId": "0Yh1kZ…",
+  "expiresAt": "2026-10-04T18:10:00.000Z",
+  "expiresInSeconds": 600
+}
+```
+
+- `launchId` 由 gateway 生成，opaque、單次可用，**無法從中推導出病人或使用者身分**。
+- 未綁定的 launch context 在 `LAUNCH_CONTEXT_TTL_SECONDS` 後到期；過期或未知的 launch id 在查詢時
+  視為不存在。
+- 請求與回應的記錄不把 PHI（patient／encounter）寫進應用日誌。
+
+回應格式：`launchId` 缺少或型別不符回 `400`；未帶或帶錯 `X-Internal-Credential` 回 `401`。
+
+### 儲存
+
+launch context 存放在一個窄介面（`LaunchContextStore`，`src/types/launch-context-store.ts`）後面，
+本票提供 in-memory 實作供測試與單機開發使用，不需要 docker 或外部服務；實作可在 app 建構時
+以 `createApp({ launchContextStore })` 注入。正式環境的 Valkey 實作見後續票。
+
+**本票不改變任何授權裁決**：launch context 的內容仍然由 access token 的 `patient` claim 提供，
+既有請求的結果與本票之前完全一致。
 
 ## Allowed Queries 設定檔
 
