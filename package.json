@@ -11,7 +11,11 @@
         "test": "vitest run",
         "test:watch": "vitest",
         "test:e2e": "tsx e2e-test/e2e.ts",
-        "format": "biome format --write",
+        "format": "node node_modules/@biomejs/biome/bin/biome format --write",
+        "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
+        "lint": "node node_modules/@biomejs/biome/bin/biome check",
+        "lint:fix": "node node_modules/@biomejs/biome/bin/biome check --write",
+        "verify": "pnpm run typecheck && pnpm run lint && pnpm run test",
         "generate:patient-params": "node scripts/generate-patient-params.mjs"
     },
     "keywords": [

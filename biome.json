@@ -6,7 +6,8 @@
         "useIgnoreFile": false
     },
     "files": {
-        "ignoreUnknown": false
+        "ignoreUnknown": false,
+        "includes": ["**", "!.scratch", "!dist", "!e2e-test"]
     },
     "formatter": {
         "enabled": true,

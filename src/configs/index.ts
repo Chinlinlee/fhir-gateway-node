@@ -1,9 +1,4 @@
-import type {
-    AuditEventActionCode,
-    BackendType,
-    RunMode,
-    SigningKeySource,
-} from "../constants/config";
+import type { AuditEventActionCode, BackendType, RunMode, SigningKeySource } from "../constants/config";
 
 import {
     AUDIT_EVENT_ACTION_CODES,
@@ -190,4 +185,3 @@ export function minimalValidEnv(overrides: Partial<Record<string, string>> = {})
 }
 
 export { BUILTIN_ACCESS_CHECKERS };
-

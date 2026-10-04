@@ -1,0 +1,22 @@
+{
+    "compilerOptions": {
+        "module": "esnext",
+        "moduleResolution": "bundler",
+        "target": "esnext",
+        "lib": ["esnext"],
+        "types": ["node", "fhir"],
+        "rootDir": ".",
+        "sourceMap": true,
+        "noUncheckedIndexedAccess": true,
+        "exactOptionalPropertyTypes": true,
+        "strict": true,
+        "noImplicitAny": true,
+        "jsx": "react-jsx",
+        "verbatimModuleSyntax": true,
+        "isolatedModules": true,
+        "noUncheckedSideEffectImports": true,
+        "moduleDetection": "force",
+        "skipLibCheck": true
+    },
+    "include": ["src/**/*.ts", "tests/**/*.ts", "e2e-test/**/*.ts", "vitest.config.ts"]
+}
