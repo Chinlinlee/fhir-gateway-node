@@ -17,6 +17,21 @@ export const ENV_KEYS = {
      * Audience values this resource server answers to; empty disables the check.
      */
     TOKEN_AUDIENCE: "TOKEN_AUDIENCE",
+    /**
+     * 是否啟用 EHR 面向的內部 launch context 註冊端點。
+     * Whether the EHR-facing internal launch context API is enabled.
+     */
+    INTERNAL_LAUNCH_API_ENABLED: "INTERNAL_LAUNCH_API_ENABLED",
+    /**
+     * 內部 launch context 端點的認證憑證；與 patient-facing bearer token 完全分開。
+     * Credential guarding the internal launch context API; unrelated to bearer tokens.
+     */
+    INTERNAL_LAUNCH_API_CREDENTIAL: "INTERNAL_LAUNCH_API_CREDENTIAL",
+    /**
+     * 未綁定 launch context 的存活秒數；綁定前的 launch id 在這段時間內可被使用。
+     * Lifetime of an unbound launch context, in seconds.
+     */
+    LAUNCH_CONTEXT_TTL_SECONDS: "LAUNCH_CONTEXT_TTL_SECONDS",
 } as const;
 
 export const DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH = false;
@@ -24,6 +39,9 @@ export const DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH = false;
 export const DEFAULT_WELL_KNOWN_ENDPOINT = ".well-known/openid-configuration";
 export const DEFAULT_RUN_MODE = "PROD";
 export const DEFAULT_PORT = 3000;
+
+export const DEFAULT_INTERNAL_LAUNCH_API_ENABLED = false;
+export const DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS = 600;
 
 export const SIGNING_KEY_SOURCES = ["jwks", "keycloak-public-key", "auto"] as const;
 export type SigningKeySource = (typeof SIGNING_KEY_SOURCES)[number];
