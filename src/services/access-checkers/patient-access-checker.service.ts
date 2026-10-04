@@ -9,7 +9,7 @@ import type { AccessDecision } from "../../types/access-decision";
 import type { FhirBundleEntry } from "../../types/fhir-bundle";
 import type { FhirRequestDetails } from "../../types/fhir-request";
 import { getResourceIdOrNull, isSameResourceType, parseResourcePath } from "../../utils/fhir.util";
-import { getLaunchIdOrFail } from "../../utils/launch-context.util";
+import { getPatientReferenceOrFail } from "../../utils/launch-context.util";
 import { LAUNCH_CLAIM_NAMES } from "../launch-context.service";
 import {
     type SmartFhirScope,
@@ -20,10 +20,10 @@ import {
 import { deniedAccessDecision, grantedAccessDecision, parseRequestBundle } from "./list-access-checker.util";
 
 /**
- * Launch context 對應的 claim 名稱；唯一來源為 `LAUNCH_CLAIM_NAMES`（設定化見 issue #8）。
- * Claim names for the launch context; `LAUNCH_CLAIM_NAMES` is the single source of truth.
+ * Scope claim 名稱；唯一來源為 `LAUNCH_CLAIM_NAMES`（設定化見 issue #8）。
+ * Claim name for the SMART scopes. 病人參照的 claim 名稱已隨 ADR-0002 移除——
+ * launch context 的病人由 gateway 自己的 store 提供，不在 token 裡。
  */
-export const PATIENT_CLAIM = LAUNCH_CLAIM_NAMES.patient;
 export const SCOPES_CLAIM = LAUNCH_CLAIM_NAMES.scopes;
 
 export class PatientAccessCheckerService implements AccessChecker {
@@ -396,7 +396,7 @@ export const patientAccessCheckerFactory: AccessCheckerFactory = {
         let authorizedPatientId: string | null = null;
         if (hasPatientScope) {
             try {
-                authorizedPatientId = getLaunchIdOrFail(context.launch, "patientId");
+                authorizedPatientId = getPatientReferenceOrFail(context.launch, "patientId");
             } catch {
                 if (!hasBroadScope) {
                     throw new AuthenticationError(

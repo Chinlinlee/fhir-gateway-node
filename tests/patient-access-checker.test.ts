@@ -3,10 +3,8 @@ import { describe, expect, it } from "vitest";
 import { AuthenticationError } from "../src/errors/authentication.error";
 import { InvalidRequestError } from "../src/errors/invalid-request.error";
 import {
-    PATIENT_CLAIM,
     PatientAccessCheckerService,
     patientAccessCheckerFactory,
-    SCOPES_CLAIM,
 } from "../src/services/access-checkers/patient-access-checker.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import {
@@ -22,7 +20,7 @@ import {
     readAccessCheckerFixture,
 } from "./helpers/access-checker-fixture";
 import { buildFhirRequest } from "./helpers/fhir-request";
-import { launchContextFromClaims } from "./helpers/launch-context-fixture";
+import { launchContextFromClaims, launchContextWithPatient } from "./helpers/launch-context-fixture";
 
 function createPatientChecker(scopesClaim = DEFAULT_TEST_SCOPES_CLAIM): PatientAccessCheckerService {
     const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
@@ -329,14 +327,9 @@ describe("PatientAccessCheckerService", () => {
         ).toBe(false);
     });
 
-    it("uses patient claim not patient_id", () => {
-        expect(PATIENT_CLAIM).toBe("patient");
-        expect(SCOPES_CLAIM).toBe("scope");
-    });
-
-    it("factory accepts user scopes without patient claim", () => {
+    it("factory accepts user scopes without a launch context", async () => {
         const checker = patientAccessCheckerFactory.create({
-            launch: launchContextFromClaims({ scope: "user/Observation.rs" }),
+            launch: await launchContextFromClaims({ scope: "user/Observation.rs" }),
             patientFinder: PatientFinderService.getInstance(),
         });
 
@@ -345,22 +338,34 @@ describe("PatientAccessCheckerService", () => {
         ).toBe(true);
     });
 
-    it("factory accepts system scopes without patient claim", () => {
+    it("factory accepts system scopes without a launch context", async () => {
         const checker = patientAccessCheckerFactory.create({
-            launch: launchContextFromClaims({ scope: "system/*.rs" }),
+            launch: await launchContextFromClaims({ scope: "system/*.rs" }),
             patientFinder: PatientFinderService.getInstance(),
         });
 
         expect(checker.checkAccess(buildFhirRequest("Observation")).canAccess()).toBe(true);
     });
 
-    it("factory still requires patient claim for patient scopes", () => {
+    it("factory still requires a launch context for patient scopes", async () => {
+        const launch = await launchContextFromClaims({ scope: "patient/Observation.rs" });
+
         expect(() =>
             patientAccessCheckerFactory.create({
-                launch: launchContextFromClaims({ scope: "patient/Observation.rs" }),
+                launch,
                 patientFinder: PatientFinderService.getInstance(),
             }),
         ).toThrow(AuthenticationError);
+    });
+
+    it("factory binds patient scopes to the patient the launch context store holds", async () => {
+        const checker = patientAccessCheckerFactory.create({
+            launch: await launchContextWithPatient(PATIENT_AUTHORIZED, { scope: "patient/Patient.read" }),
+            patientFinder: PatientFinderService.getInstance(),
+        });
+
+        expect(checker.checkAccess(buildFhirRequest(`Patient/${PATIENT_AUTHORIZED}`)).canAccess()).toBe(true);
+        expect(checker.checkAccess(buildFhirRequest(`Patient/${PATIENT_NON_AUTHORIZED}`)).canAccess()).toBe(false);
     });
 
     it("user scopes skip patient compartment restriction", () => {

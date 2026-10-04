@@ -2,9 +2,12 @@ import { node } from "@elysia/node";
 import { Elysia } from "elysia";
 
 import type { GatewayConfig } from "./configs/env.schema";
+import { DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS, DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS } from "./constants/config";
 import { corsPlugin } from "./middlewares/cors";
 import { fhirRoute } from "./routes/fhir.route";
 import { healthRoute } from "./routes/health.route";
+import { internalLaunchRoute } from "./routes/internal-launch.route";
+import { smartRoute } from "./routes/smart.route";
 import { wellKnownRoute } from "./routes/well-known.route";
 import type { AccessCheckerRegistryService } from "./services/access-checker-registry.service";
 import { createDefaultAccessCheckerRegistry } from "./services/access-checker-registry.service";
@@ -13,10 +16,13 @@ import { AuditEventService } from "./services/audit-event.service";
 import { FhirBackendService } from "./services/fhir-backend.service";
 import { GcpAccessTokenProviderService } from "./services/gcp-access-token-provider.service";
 import { HttpFhirClientService } from "./services/http-fhir-client.service";
-import { defaultLaunchContextProvider } from "./services/launch-context.service";
+import { DefaultLaunchContextProvider } from "./services/launch-context.service";
+import { InMemoryLaunchContextStore } from "./services/launch-context-store.service";
 import { PatientFinderService } from "./services/patient-finder.service";
+import { SmartAuthorizationSessions } from "./services/smart-authorization-sessions.service";
 import type { TokenVerifierService } from "./services/token-verifier.service";
 import type { LaunchContextProvider } from "./types/launch-context";
+import type { LaunchContextStore } from "./types/launch-context-store";
 
 export type CreateAppOptions = {
     tokenVerifier?: TokenVerifierService;
@@ -28,32 +34,97 @@ export type CreateAppOptions = {
     httpFhirClient?: HttpFhirClientService;
     fhirBackend?: FhirBackendService;
     auditEventService?: AuditEventService;
+    /**
+     * Launch context store。
+     *
+     * 省略時建立 in-memory 實作：**測試與單機開發用的預設值，不適合正式環境**（重啟會失去
+     * 綁定、多個 instance 互相看不見）。正式部署由 `createLaunchContextStore(config)`
+     * 依 `LAUNCH_CONTEXT_STORE` 建立並注入。
+     * Defaults to the in-memory implementation, which is not suitable for production.
+     */
+    launchContextStore?: LaunchContextStore;
 };
 
 export const createApp = (options?: CreateAppOptions) => {
     const app = new Elysia({ adapter: node() }).use(corsPlugin).use(healthRoute);
-    const gcpTokenProvider = options?.config?.backendType === "GCP" ? new GcpAccessTokenProviderService() : null;
+    const config = options?.config;
+    const gcpTokenProvider = config?.backendType === "GCP" ? new GcpAccessTokenProviderService() : null;
 
-    if (options?.tokenVerifier) {
-        app.use(wellKnownRoute(options.tokenVerifier));
+    // 內部註冊端點與代理的授權流程共用同一個 store：`authorize` 檢查的 launch id 必須就是
+    // EHR 剛建立的那一份，綁定也必須寫進同一份。
+    const launchContextStore =
+        options?.launchContextStore ??
+        new InMemoryLaunchContextStore(
+            () => Date.now(),
+            config?.launchContextBoundTtlSeconds ?? DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS,
+        );
+
+    // 稽核管道在建構時解析一次，launch lifecycle 與 FHIR 存取共用同一個 AuditEventService
+    // （CONTEXT.md 的 Launch AuditEvent 與 Access AuditEvent 共用管道）。
+    // `AUDIT_EVENT_ACTIONS_CONFIG` 仍是唯一的稽核開關：空值代表完全不稽核。
+    const auditEnabled = config !== undefined && config.auditEventActions.length > 0;
+    // FhirBackendService 只在真的有人要用時才建立：AuditEventService 與 list checker。
+    const fhirBackend =
+        options?.fhirBackend ??
+        (config !== undefined && (options?.auditEventService === undefined || config.accessChecker === "list")
+            ? new FhirBackendService({
+                  baseUrl: config.proxyTo,
+                  ...(gcpTokenProvider ? { getBearerToken: () => gcpTokenProvider.getAccessToken() } : {}),
+              })
+            : undefined);
+    const auditEventService =
+        options?.auditEventService ?? (auditEnabled && fhirBackend ? new AuditEventService(fhirBackend) : undefined);
+
+    // 內部 launch context 端點的認證獨立於 patient-facing bearer token，因此它的註冊
+    // 不依賴 tokenVerifier：EHR 服務帳號在 App 開啟前就該能註冊一次 launch。
+    if (config?.internalLaunchApiEnabled === true && config.internalLaunchApiCredential) {
+        app.use(
+            internalLaunchRoute({
+                credential: config.internalLaunchApiCredential,
+                ttlSeconds: config.launchContextTtlSeconds ?? DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS,
+                store: launchContextStore,
+                ...(auditEventService ? { auditEventService } : {}),
+                ...(config.gatewayPublicBaseUrl !== undefined ? { gatewayBaseUrl: config.gatewayPublicBaseUrl } : {}),
+            }),
+        );
     }
 
-    if (options?.tokenVerifier && options.config) {
-        const config = options.config;
-        // FhirBackendService 只在真的有人要用時才建立：AuditEventService 與 list checker。
-        const fhirBackend =
-            options.fhirBackend ??
-            (options.auditEventService === undefined || config.accessChecker === "list"
-                ? new FhirBackendService({
-                      baseUrl: config.proxyTo,
-                      ...(gcpTokenProvider ? { getBearerToken: () => gcpTokenProvider.getAccessToken() } : {}),
-                  })
-                : undefined);
+    // 代理 authorization flow 只在 operator 同時給了 public base URL 與 IdP client 憑證時成立；
+    // 缺任何一項就維持被動，SMART App 照舊直接對 IdP 走授權流程，SMART configuration 也原樣代理。
+    const gatewayPublicBaseUrl = config?.gatewayPublicBaseUrl;
+    const gatewayClientId = config?.gatewayClientId;
+    const gatewayClientSecret = config?.gatewayClientSecret;
+    const proxiedAuthorization =
+        options?.tokenVerifier !== undefined &&
+        gatewayPublicBaseUrl !== undefined &&
+        gatewayClientId !== undefined &&
+        gatewayClientSecret !== undefined;
+
+    if (proxiedAuthorization && options.tokenVerifier) {
+        app.use(
+            smartRoute({
+                publicBaseUrl: gatewayPublicBaseUrl,
+                idpClientId: gatewayClientId,
+                idpClientSecret: gatewayClientSecret,
+                store: launchContextStore,
+                sessions: new SmartAuthorizationSessions(),
+                tokenVerifier: options.tokenVerifier,
+                ...(auditEventService ? { auditEventService } : {}),
+            }),
+        );
+    }
+
+    if (options?.tokenVerifier) {
+        app.use(wellKnownRoute(options.tokenVerifier, proxiedAuthorization ? gatewayPublicBaseUrl : undefined));
+    }
+
+    if (options?.tokenVerifier && config) {
         app.use(
             fhirRoute({
                 config,
                 tokenVerifier: options.tokenVerifier,
-                launchContextProvider: options.launchContextProvider ?? defaultLaunchContextProvider,
+                launchContextProvider:
+                    options.launchContextProvider ?? new DefaultLaunchContextProvider(launchContextStore),
                 ...(fhirBackend ? { fhirBackend } : {}),
                 allowedQueries:
                     options.allowedQueries ?? AllowedQueriesCheckerService.loadFromFile(config.allowedQueriesFile),
@@ -67,9 +138,7 @@ export const createApp = (options?: CreateAppOptions) => {
                         // GCP 轉發與後端查詢共用同一組 ADC；未提供時建構即失敗。
                         ...(gcpTokenProvider ? { getGcpAccessToken: () => gcpTokenProvider.getAccessToken() } : {}),
                     }),
-                ...(options.auditEventService || !fhirBackend
-                    ? {}
-                    : { auditEventService: new AuditEventService(fhirBackend) }),
+                ...(auditEventService ? { auditEventService } : {}),
             }),
         );
     }

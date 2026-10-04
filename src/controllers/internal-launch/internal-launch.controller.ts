@@ -1,0 +1,118 @@
+import { z } from "zod";
+import { INTERNAL_LAUNCH_API_PREFIX, LAUNCH_CONTEXTS_PATH } from "../../constants/routes";
+import type { AuditEventService } from "../../services/audit-event.service";
+import type { LaunchContextStore } from "../../types/launch-context-store";
+import { constantTimeEquals } from "../../utils/constant-time.util";
+
+/** 認證用的 request header；刻意不用 `Authorization`，讓 EHR 服務帳號與臨床使用者的 bearer token 不會混在一起。 */
+export const INTERNAL_CREDENTIAL_HEADER = "x-internal-credential";
+
+/** 內部端點需要的設定值；由 route 在 app 建構時解析好傳進來。 */
+export type InternalLaunchDeps = {
+    /** 內部認證憑證；與 patient-facing bearer token 完全分開。 */
+    credential: string;
+    /** 未綁定 launch context 的 TTL（秒）。 */
+    ttlSeconds: number;
+    store: LaunchContextStore;
+    /** 稽核管道；launch context 的建立是 PHI 授權軌跡的起點（ADR-0002）。 */
+    auditEventService?: AuditEventService;
+    /** gateway 自己的 public base URL，寫進稽核事件的 observer；operator 未設定時不寫。 */
+    gatewayBaseUrl?: string;
+};
+
+/**
+ * 一次 launch 要嘛綁一位病人（patient compartment launch），要嘛綁一份病人清單
+ * （list launch）；兩者都是 PHI，只進 store 不進 token（ADR-0002）。
+ */
+const RegisterLaunchContextBodySchema = z
+    .object({
+        patientId: z.string().trim().min(1).optional(),
+        patientListId: z.string().trim().min(1).optional(),
+        encounterId: z.string().trim().min(1).optional(),
+    })
+    .refine((body) => (body.patientId !== undefined) !== (body.patientListId !== undefined), {
+        message: "exactly one of patientId or patientListId is required",
+    });
+
+function jsonError(status: number, message: string): Response {
+    return Response.json({ error: message }, { status });
+}
+
+/**
+ * 存取與錯誤記錄只寫 method／path／status：病人、就診與嘗試用的憑證都不進日誌。
+ * Access and error records carry method, path and status only — never PHI or the credential.
+ */
+function logOutcome(status: number): void {
+    console.log(`[internal-launch] ${status} POST ${INTERNAL_LAUNCH_API_PREFIX}${LAUNCH_CONTEXTS_PATH}`);
+}
+
+export abstract class InternalLaunchController {
+    /**
+     * EHR 在「從某位病人的頁面開啟 SMART App」之前呼叫這裡，取得一份尚未綁定到任何使用者的
+     * launch context 與 gateway 生成的 opaque launch id，之後當 `authorize` 的 `launch` 參數。
+     *
+     * 認證是設定的內部憑證，與 patient-facing bearer token 完全分開。
+     * Registers a launch context and returns the gateway-generated opaque launch id plus its expiry.
+     *
+     * PHI（patient／encounter）只進 store，不寫進應用日誌；錯誤訊息一律是固定字串。
+     */
+    static async register(request: Request, deps: InternalLaunchDeps): Promise<Response> {
+        const credential = request.headers.get(INTERNAL_CREDENTIAL_HEADER);
+        if (credential === null || !constantTimeEquals(credential, deps.credential)) {
+            // 不記錄嘗試用的憑證本身。
+            logOutcome(401);
+            return jsonError(401, "Invalid internal launch API credential");
+        }
+
+        let payload: unknown;
+        try {
+            payload = await request.json();
+        } catch {
+            logOutcome(400);
+            return jsonError(400, "Request body must be JSON");
+        }
+
+        const parsed = RegisterLaunchContextBodySchema.safeParse(payload);
+        if (!parsed.success) {
+            logOutcome(400);
+            return jsonError(400, "exactly one of patientId or patientListId is required; encounterId is optional");
+        }
+
+        const created = await deps.store.create({
+            ttlSeconds: deps.ttlSeconds,
+            ...(parsed.data.patientId !== undefined
+                ? { patientId: parsed.data.patientId }
+                : { patientListId: parsed.data.patientListId ?? "" }),
+            ...(parsed.data.encounterId !== undefined ? { encounterId: parsed.data.encounterId } : {}),
+        });
+
+        // Launch AuditEvent：launch context 離開 token 之後，這裡是這次 PHI 授權軌跡的第一筆。
+        if (deps.auditEventService !== undefined) {
+            try {
+                await deps.auditEventService.logLaunch({
+                    phase: "registration",
+                    patientReference:
+                        parsed.data.patientId !== undefined
+                            ? `Patient/${parsed.data.patientId}`
+                            : `List/${parsed.data.patientListId ?? ""}`,
+                    launchId: created.launchId,
+                    ...(deps.gatewayBaseUrl !== undefined ? { gatewayBaseUrl: deps.gatewayBaseUrl } : {}),
+                });
+            } catch {
+                // 稽核失敗不改變註冊結果：context 已經建立，一樣回 201。
+                // 只記固定字串——送不出去的 AuditEvent 帶著病人參照，錯誤物件可能把它帶進日誌。
+                console.error("[audit] launch context 註冊的 AuditEvent 送出失敗");
+            }
+        }
+
+        logOutcome(201);
+        return Response.json(
+            {
+                launchId: created.launchId,
+                expiresAt: new Date(created.expiresAt).toISOString(),
+                expiresInSeconds: deps.ttlSeconds,
+            },
+            { status: 201 },
+        );
+    }
+}

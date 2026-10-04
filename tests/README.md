@@ -45,11 +45,44 @@
 
 ### `helpers/launch-context-fixture.ts` — launch context
 
-`launchContextFromClaims(claims)` 用**真實的** `DefaultLaunchContextProvider` 把 JWT claim 轉成
-`LaunchContext`。測試不需要知道 claim name 的細節——這是刻意的：改用真實 provider 才能確保
-測試不會因為 claim name 改動而與實際行為脫節。
+launch context 的病人參照由 gateway 自己的 store 提供（ADR-0002），**不在 token 裡**，因此
+fixture 也得走 store。三個 helper 都用**真實的** `DefaultLaunchContextProvider`：
 
-單元測試 access checker 時用它取代過去直接塞 `jwt` 的寫法。
+- `launchContextFromClaims(claims)`：背後是一個什麼都沒綁定的 store，因此 `patientId`／
+  `patientListId` 一定是 `undefined`——這正是「沒有 launch context」在授權層的樣子。
+- `launchContextWithPatient(patientId, claims)`：先在 store 裡建立並綁定一份 context，再讓 provider
+  讀回來。窄的 checker 單元測試用它取代過去直接塞 `patient` claim 的寫法。
+- `seedLaunchContextForToken(store, { subject, clientId, tokenId }, { patientId | patientListId })`：
+  給 app-over-HTTP 測試用。測試自己簽 token，因此必須把綁定接到那張 token 的 `jti` 上，並把
+  `launchContextStore` 注入 `createApp`。**忘了這一步，patient／list 模式的請求一律 401**，
+  而且是不會報錯的那一種。
+
+### `helpers/launch-flow-fixture.ts` — 走完整條 SMART launch 路徑的共用形狀
+
+`startUpstreamServer()`（stub FHIR upstream，同時收集送出的 AuditEvent）、`createBaseConfig()`、
+`authorizeParams()`、`gatewayAuthorize()`、`gatewayToken()`、`locationOf()`、`authenticateAtIdp()`、
+`signAccessToken()`，以及走完整條瀏覽器路徑的 `registerLaunchContext()`／`launch()`／`fhirGet()`，
+加上一組固定常數（`APP_CLIENT_ID`、`CODE_VERIFIER`、`CLINICIAN_SUBJECT`、`APP_AUTHORIZE_SCOPE`…）。
+
+`store-backed-launch-context.test.ts`（in-memory）與 `valkey-launch-context-store.test.ts`（真實
+Valkey）走的是同一條路徑，差別只有 store——兩邊共用這份 fixture，那個差別才看得出來。
+`smart-authorization-flow.test.ts` 與 `launch-audit-event.test.ts` 也用它，因此**不要在個別測試檔
+裡重新宣告同名的參數或 helper**：那份清單會開始漂移，而漂移出來的那一份不會有測試失敗。
+
+### `tests/valkey-launch-context-store.test.ts` — 需要真實 Valkey 的一組
+
+驗證「綁定活得比 process 久」與「多個 instance 看得見彼此的綁定」：gateway 重啟之後仍授權給同
+一位病人、兩個 instance 各自解析到對方的綁定、store 不可達時 patient／list 模式 fail closed。
+
+**預設不依賴外部服務**：啟動時偵測不到 Valkey 就整組跳過，所以 `pnpm run verify` 在沒有
+docker 的機器上也是綠的。要真的跑它：
+
+```bash
+docker run -d --name valkey -p 6379:6379 valkey/valkey:8-alpine
+pnpm vitest run tests/valkey-launch-context-store.test.ts
+```
+
+或在 `LAUNCH_CONTEXT_VALKEY_URL` 指定既有的 Valkey。
 
 ### `helpers/access-checker-fixture.ts` — access checker 測試常數
 

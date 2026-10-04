@@ -6,10 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { type App, createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
-import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
+import { InMemoryLaunchContextStore } from "../src/services/launch-context-store.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
+import { seedLaunchContextForToken } from "./helpers/launch-context-fixture";
 
 type UpstreamServer = {
     baseUrl: string;
@@ -92,23 +93,33 @@ describe("Scope resolution over the app seam", () => {
     let tokenVerifier: TokenVerifierService;
     let config: GatewayConfig;
     let app: App;
+    // 病人參照改由 launch context store 提供：測試自簽 token，因此 app 與 seed 共用同一份 store。
+    let launchContextStore: InMemoryLaunchContextStore;
 
     const PATIENT_ID = "456";
 
+    /**
+     * 病人參照只存在於 launch context store；token 靠 `jti` 找回那份綁定，因此每張自簽的
+     * token 都配一個獨立的 launch context。
+     */
+    async function signPatientToken(claims: Record<string, unknown>, tokenId: string): Promise<string> {
+        const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, { jti: tokenId, ...claims });
+        await seedLaunchContextForToken(
+            launchContextStore,
+            { subject: "gateway-user", clientId: "test-app", tokenId },
+            { patientId: PATIENT_ID },
+        );
+        return jwt;
+    }
+
     /** 以 `scope` 空白分隔字串交付 SMART scopes。 */
-    function tokenWithScopeString(scopes: string): Promise<string> {
-        return signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [PATIENT_CLAIM]: PATIENT_ID,
-            scope: scopes,
-        });
+    function tokenWithScopeString(scopes: string, tokenId: string): Promise<string> {
+        return signPatientToken({ scope: scopes }, tokenId);
     }
 
     /** 以 RFC 9068 `scp` 陣列交付 SMART scopes。 */
-    function tokenWithScpArray(scopes: string[]): Promise<string> {
-        return signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [PATIENT_CLAIM]: PATIENT_ID,
-            scp: scopes,
-        });
+    function tokenWithScpArray(scopes: string[], tokenId: string): Promise<string> {
+        return signPatientToken({ scp: scopes }, tokenId);
     }
 
     function get(path: string, jwt: string): Promise<Response> {
@@ -137,8 +148,14 @@ describe("Scope resolution over the app seam", () => {
             runMode: "PROD",
             allowTokenIssuerHostMismatch: false,
         });
+        launchContextStore = new InMemoryLaunchContextStore();
         config = createBaseConfig({ tokenIssuer: issuer.issuerUrl, proxyTo: upstream.baseUrl });
-        app = createApp({ tokenVerifier, config, patientFinder: PatientFinderService.getInstance() });
+        app = createApp({
+            tokenVerifier,
+            config,
+            patientFinder: PatientFinderService.getInstance(),
+            launchContextStore,
+        });
     });
 
     afterEach(async () => {
@@ -147,8 +164,8 @@ describe("Scope resolution over the app seam", () => {
     });
 
     it("accepts the same scopes from the space-delimited scope string and from the scp array", async () => {
-        const scopeToken = await tokenWithScopeString("patient/Patient.read patient/Observation.read");
-        const scpToken = await tokenWithScpArray(["patient/Patient.read", "patient/Observation.read"]);
+        const scopeToken = await tokenWithScopeString("patient/Patient.read patient/Observation.read", "token-1");
+        const scpToken = await tokenWithScpArray(["patient/Patient.read", "patient/Observation.read"], "token-2");
 
         for (const jwt of [scopeToken, scpToken]) {
             expect((await get("/Patient/456", jwt)).status).toBe(200);
@@ -158,8 +175,8 @@ describe("Scope resolution over the app seam", () => {
     });
 
     it("refuses a scp array entry that is not a SMART scope exactly as the scope string form refuses it", async () => {
-        const scopeToken = await tokenWithScopeString("openid profile");
-        const scpToken = await tokenWithScpArray(["openid", "profile"]);
+        const scopeToken = await tokenWithScopeString("openid profile", "token-3");
+        const scpToken = await tokenWithScpArray(["openid", "profile"], "token-4");
 
         const scopeResponse = await get("/Patient/456", scopeToken);
         const scpResponse = await get("/Patient/456", scpToken);
@@ -169,8 +186,8 @@ describe("Scope resolution over the app seam", () => {
     });
 
     it("ignores a malformed entry alongside a valid one in both delivery forms", async () => {
-        const scopeToken = await tokenWithScopeString("patient/Patient.read openid profile");
-        const scpToken = await tokenWithScpArray(["patient/Patient.read", "openid", "profile"]);
+        const scopeToken = await tokenWithScopeString("patient/Patient.read openid profile", "token-5");
+        const scpToken = await tokenWithScpArray(["patient/Patient.read", "openid", "profile"], "token-6");
 
         for (const jwt of [scopeToken, scpToken]) {
             expect((await get("/Patient/456", jwt)).status).toBe(200);
@@ -179,19 +196,15 @@ describe("Scope resolution over the app seam", () => {
     });
 
     it("governs by scp when both forms are present and scp is narrower", async () => {
-        const jwt = await signJwtWithClaims(issuer.issuerUrl, issuer.keys.privateKey, {
-            [PATIENT_CLAIM]: PATIENT_ID,
-            scope: "patient/*.*",
-            scp: ["patient/Patient.read"],
-        });
+        const jwt = await signPatientToken({ scope: "patient/*.*", scp: ["patient/Patient.read"] }, "token-7");
 
         expect((await get("/Patient/456", jwt)).status).toBe(200);
         expect((await get("/Observation/enc-1", jwt)).status).toBe(403);
     });
 
     it("refuses an unauthorized resource or verb in both delivery forms", async () => {
-        const scopeToken = await tokenWithScopeString("patient/Patient.read");
-        const scpToken = await tokenWithScpArray(["patient/Patient.read"]);
+        const scopeToken = await tokenWithScopeString("patient/Patient.read", "token-8");
+        const scpToken = await tokenWithScpArray(["patient/Patient.read"], "token-9");
 
         for (const jwt of [scopeToken, scpToken]) {
             expect((await get("/Observation/enc-1", jwt)).status).toBe(403);
@@ -200,8 +213,8 @@ describe("Scope resolution over the app seam", () => {
     });
 
     it("resolves v1 read into read and search permissions for both delivery forms", async () => {
-        const scopeToken = await tokenWithScopeString("patient/Observation.read");
-        const scpToken = await tokenWithScpArray(["patient/Observation.read"]);
+        const scopeToken = await tokenWithScopeString("patient/Observation.read", "token-10");
+        const scpToken = await tokenWithScpArray(["patient/Observation.read"], "token-11");
 
         for (const jwt of [scopeToken, scpToken]) {
             expect((await get(`/Observation?patient=Patient/${PATIENT_ID}`, jwt)).status).toBe(200);

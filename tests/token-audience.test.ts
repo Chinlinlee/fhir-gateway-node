@@ -6,10 +6,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/app";
 import { loadGatewayConfig, minimalValidEnv } from "../src/configs";
 import { FHIR_API_PREFIX } from "../src/constants/routes";
-import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
+import { InMemoryLaunchContextStore } from "../src/services/launch-context-store.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
+import { seedLaunchContextForToken } from "./helpers/launch-context-fixture";
 
 type UpstreamServer = {
     baseUrl: string;
@@ -71,19 +72,30 @@ async function createAudienceScopedApp(
         }),
     );
     const tokenVerifier = await TokenVerifierService.create(config);
+    const launchContextStore = new InMemoryLaunchContextStore();
     const app = createApp({
         tokenVerifier,
         config,
         patientFinder: PatientFinderService.getInstance(),
+        launchContextStore,
     });
 
+    // patient compartment 的 launch context 由 gateway 自己的 store 提供，不在 token 裡；
+    // 每張新簽的 token 都帶一個獨一無二的 jti，並在送出前綁好同一組 launch context。
+    let tokenCounter = 0;
     const signToken = async (audience: string | string[] | undefined, scope: string): Promise<string> => {
-        const builder = new SignJWT({
-            [PATIENT_CLAIM]: "456",
-            scope,
-        })
+        tokenCounter += 1;
+        const tokenId = `audience-test-token-${tokenCounter}`;
+        await seedLaunchContextForToken(
+            launchContextStore,
+            { subject: "gateway-user", clientId: "test-app", tokenId },
+            { patientId: "456" },
+        );
+        const builder = new SignJWT({ scope })
             .setProtectedHeader({ alg: "RS256" })
-            .setIssuer(issuer.issuerUrl);
+            .setIssuer(issuer.issuerUrl)
+            .setSubject("gateway-user")
+            .setJti(tokenId);
         if (audience !== undefined) {
             builder.setAudience(audience);
         }
