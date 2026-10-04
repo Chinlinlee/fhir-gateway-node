@@ -44,5 +44,5 @@ _Avoid_: target、resource indicator
 ## 稽核
 
 **Access AuditEvent**:
-每一次 FHIR 存取的稽核紀錄。**Launch AuditEvent**則記錄 launch context 的建立、綁定與撤銷。兩者是不同的稽核類別，共用同一管道。
+每一次 FHIR 存取的稽核紀錄。**Launch AuditEvent**則記錄 launch context 的建立、綁定與撤銷；建立與綁定已實作，撤銷依附於 ADR-0004 的 session 存活檢查。兩者是不同的稽核類別，共用同一管道，並以 `AuditEvent.type.system` 分流。
 _Avoid_: audit log、access log（後者是 HTTP 層紀錄，不含授權決策）

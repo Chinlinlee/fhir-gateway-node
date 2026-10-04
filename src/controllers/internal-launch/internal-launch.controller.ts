@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { INTERNAL_LAUNCH_API_PREFIX, LAUNCH_CONTEXTS_PATH } from "../../constants/routes";
+import type { AuditEventService } from "../../services/audit-event.service";
 import type { LaunchContextStore } from "../../types/launch-context-store";
 import { constantTimeEquals } from "../../utils/constant-time.util";
 
@@ -13,6 +14,10 @@ export type InternalLaunchDeps = {
     /** 未綁定 launch context 的 TTL（秒）。 */
     ttlSeconds: number;
     store: LaunchContextStore;
+    /** 稽核管道；launch context 的建立是 PHI 授權軌跡的起點（ADR-0002）。 */
+    auditEventService?: AuditEventService;
+    /** gateway 自己的 public base URL，寫進稽核事件的 observer；operator 未設定時不寫。 */
+    gatewayBaseUrl?: string;
 };
 
 /**
@@ -80,6 +85,24 @@ export abstract class InternalLaunchController {
                 : { patientListId: parsed.data.patientListId ?? "" }),
             ...(parsed.data.encounterId !== undefined ? { encounterId: parsed.data.encounterId } : {}),
         });
+
+        // Launch AuditEvent：launch context 離開 token 之後，這裡是這次 PHI 授權軌跡的第一筆。
+        if (deps.auditEventService !== undefined) {
+            try {
+                await deps.auditEventService.logLaunch({
+                    phase: "registration",
+                    patientReference:
+                        parsed.data.patientId !== undefined
+                            ? `Patient/${parsed.data.patientId}`
+                            : `List/${parsed.data.patientListId ?? ""}`,
+                    ...(deps.gatewayBaseUrl !== undefined ? { gatewayBaseUrl: deps.gatewayBaseUrl } : {}),
+                });
+            } catch {
+                // 稽核失敗不改變註冊結果：context 已經建立，一樣回 201。
+                // 只記固定字串——送不出去的 AuditEvent 帶著病人參照，錯誤物件可能把它帶進日誌。
+                console.error("[audit] launch context 註冊的 AuditEvent 送出失敗");
+            }
+        }
 
         logOutcome(201);
         return Response.json(

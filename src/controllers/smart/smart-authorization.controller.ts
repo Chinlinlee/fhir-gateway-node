@@ -1,5 +1,6 @@
 import { SMART_API_PREFIX, SMART_CALLBACK_PATH } from "../../constants/routes";
 import { OAuthError } from "../../errors/oauth.error";
+import type { AuditEventService } from "../../services/audit-event.service";
 import { IdpTokenExchangeService } from "../../services/idp-token-exchange.service";
 import type { SmartAuthorizationSessions } from "../../services/smart-authorization-sessions.service";
 import type { TokenVerifierService } from "../../services/token-verifier.service";
@@ -26,6 +27,8 @@ export type SmartAuthorizationDeps = {
     sessions: SmartAuthorizationSessions;
     /** 驗證 IdP 發的 access token：callback 要從裡面取出 `sub` 才能綁定。 */
     tokenVerifier: TokenVerifierService;
+    /** 稽核管道；綁定是這次 PHI 授權真正成立的時刻（ADR-0002）。 */
+    auditEventService?: AuditEventService;
 };
 
 /**
@@ -153,6 +156,28 @@ export abstract class SmartAuthorizationController {
                 "The launch could not be bound; it may have expired or already been used.",
             );
         }
+
+        // Launch AuditEvent：access token 不再帶病人，誰授權了誰看哪位病人只存在於這筆事件。
+        if (deps.auditEventService !== undefined) {
+            try {
+                await deps.auditEventService.logLaunch({
+                    phase: "binding",
+                    patientReference:
+                        bound.patientId !== undefined
+                            ? `Patient/${bound.patientId}`
+                            : `List/${bound.patientListId ?? ""}`,
+                    subject,
+                    clientId: pending.clientId,
+                    gatewayBaseUrl: deps.publicBaseUrl,
+                    ...(verified.payload.iss !== undefined ? { issuer: verified.payload.iss } : {}),
+                });
+            } catch {
+                // 稽核失敗不改變授權結果：綁定已經寫進 store，App 照樣拿得到 code。
+                // 只記固定字串——送不出去的 AuditEvent 帶著病人參照，錯誤物件可能把它帶進日誌。
+                console.error("[audit] launch context 綁定的 AuditEvent 送出失敗");
+            }
+        }
+
         deps.sessions.discardAuthorization(pending.correlationId);
 
         const issued: IssuedAuthorization = {
