@@ -98,4 +98,23 @@ describe("loadGatewayConfig", () => {
         );
         expect(config.wellKnownEndpoint).toBe(".well-known/custom");
     });
+
+    it("defaults SIGNING_KEY_SOURCE to auto", () => {
+        const config = loadGatewayConfig(minimalValidEnv());
+        expect(config.signingKeySource).toBe("auto");
+    });
+
+    it("parses SIGNING_KEY_SOURCE", () => {
+        const jwks = loadGatewayConfig(minimalValidEnv({ SIGNING_KEY_SOURCE: "JWKS" }));
+        expect(jwks.signingKeySource).toBe("jwks");
+
+        const keycloak = loadGatewayConfig(minimalValidEnv({ SIGNING_KEY_SOURCE: "keycloak-public-key" }));
+        expect(keycloak.signingKeySource).toBe("keycloak-public-key");
+    });
+
+    it("throws on invalid SIGNING_KEY_SOURCE", () => {
+        expect(() => loadGatewayConfig(minimalValidEnv({ SIGNING_KEY_SOURCE: "keycloak" }))).toThrow(
+            /SIGNING_KEY_SOURCE/,
+        );
+    });
 });

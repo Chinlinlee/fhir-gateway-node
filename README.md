@@ -11,6 +11,49 @@
 - realm 請使用 `smart`
 - patient-based flow 需使用 `patient` claim（JWT claim key: `patient`）
 
+## Identity Provider（驗簽金鑰來源）
+
+gateway 啟動時只抓一次 `TOKEN_ISSUER` + `WELL_KNOWN_ENDPOINT` 的 OIDC discovery document，這份文件同時用於取得驗簽金鑰與代理 `.well-known/smart-configuration`。驗簽金鑰的取得方式由 `SIGNING_KEY_SOURCE` 決定：
+
+| 值 | 行為 |
+| --- | --- |
+| `auto`（預設） | 先用 discovery document 的 `jwks_uri`；取不到就退回 legacy `public_key` |
+| `jwks` | 只走標準路徑；discovery document 沒有 `jwks_uri` 時啟動失敗 |
+| `keycloak-public-key` | 只走 legacy 路徑；issuer root URL 沒有 `public_key` 時啟動失敗 |
+
+- `jwks`（標準路徑）：以 `jwks_uri` 的 JWKS 驗簽，依 token 的 `kid` 選金鑰。任何標準 OIDC provider（Keycloak、Logto、Casdoor、Auth0、Entra…）都可直接使用。
+- `jwks` 路徑支援**金鑰輪替**：遇到 token 帶了 gateway 尚未見過的 `kid` 時，會重新抓一次 JWKS 再選一次金鑰，因此 IdP 換金鑰不需重啟 gateway。IdP 在重新抓取期間連不上時該請求以 401 收場。
+- 未知 `kid` 的重新抓取有**速率上限**：`jose` 是以**未驗證**的 protected header 選金鑰，因此任何語法合法的 JWT 帶著任意的 `kid` 都會觸發重新抓取。gateway 在 60 秒內最多為 5 個**抓完仍然對不上**的 `kid` 對外抓取 JWKS，超過就直接 401（不再對外連線）；時間窗過去後恢復正常輪替。抓完就解析得到的 `kid` 會**退費**，因此沒有攻擊者時 IdP 連續輪替金鑰不會被自己的防護擋下。
+- `kid` 缺漏時：JWKS 只發布**一把**可用金鑰就用它驗簽（與 legacy `keycloak-public-key` adapter 忽略 `kid` 的行為一致）；發布**多把**時無法唯一決定用哪一把驗簽，一律 401。
+- `keycloak-public-key`（legacy adapter）：GET `TOKEN_ISSUER` 的 **root URL**，解析 Keycloak 專屬的 `public_key`（base64 SPKI DER）。保留給既有 Keycloak 部署。
+- 明確選擇的路徑不可用時**不會**靜默退回另一條路徑，啟動會直接失敗並在訊息中指名 `SIGNING_KEY_SOURCE`。
+- IdP 無法連線時會依啟動重試（3 次）後失敗。抓 OIDC discovery document 失敗時訊息指名 `TOKEN_ISSUER`；抓 `jwks_uri` 失敗時訊息指名 `SIGNING_KEY_SOURCE`（因為出問題的是驗簽金鑰來源），兩者都附上原始原因。
+
+仍為 Keycloak 專屬的設定：`ALLOW_TOKEN_ISSUER_HOST_MISMATCH`（依 Keycloak 的 `/realms/<name>` 路徑判斷 issuer 等價）。`TOKEN_ISSUER` 與 `WELL_KNOWN_ENDPOINT` 則是標準 OIDC 設定。
+
+### Issuer 比對（IssuerPolicy）
+
+「這個 gateway 信任哪些 issuer」由單一 `IssuerPolicy` 決定，依下列順位套用三個具名策略，先接受者勝出：
+
+1. **精確比對**：JWT 的 `iss` 與 `TOKEN_ISSUER` 完全相同即接受（`ALLOW_TOKEN_ISSUER_HOST_MISMATCH` 開啟時仍走這一條）。
+2. **開發模式容忍**：`RUN_MODE=DEV` 時接受不同的 `iss`，印出警告後以 token 自己的 issuer 驗簽（Android emulator 會帶不同 issuer）。
+3. **Keycloak realm pathname 等價**（**Keycloak 專屬**）：`ALLOW_TOKEN_ISSUER_HOST_MISMATCH=true` 時，若兩個 issuer URL 的 pathname 相同即視為等價，印出警告後以 token 自己的 issuer 驗簽。這是對 Keycloak 把 realm 名稱放在 URL path（`/realms/<name>`）的假設，**不是**通用的 issuer 等價規則。
+
+三個策略都不接受時回 401。策略只透過 `IssuerPolicy` 介面使用，其他呼叫端無法繞過 policy 單獨套用。
+
+## SMART Scopes 的兩種交付形式（ScopeResolver）
+
+IdP 交付 SMART scopes 有兩種標準化形式，gateway 兩種都接受，由單一 `ScopeResolver` 正規化後交給 access checker：
+
+| 形式 | claim | 說明 |
+| --- | --- | --- |
+| 空白分隔字串 | `scope` | OAuth 2.0 標準形式，也是現行 Keycloak 部署的行為 |
+| 字串陣列 | `scp` | RFC 9068 標準形式，多數其他 IdP 預設採用 |
+
+- **兩者並存時以 `scp` 為準**：`scp` 是 RFC 9068 的標準形式，IdP 同時發出兩者等同於刻意宣告採用新形式。
+- **兩種形式的每一個 entry 都走同一套 SMART v2 文法驗證**（`src/services/smart-scope.service.ts`），接受陣列形式**不會**放寬可接受的 scope 字串集合；不符合文法的 entry 一律略過。
+- **v1 `read`/`write` 到 `cruds` 的相容處理在 resolver 內完成**（`read` → READ + SEARCH，`write` → CREATE + UPDATE + DELETE），因此 access checker 只看得到已解析的 v2 permissions，不會讀 scope claim。
+
 ## Basic Access Checker（跨 principal 合併 CRUDS）
 
 `ACCESS_CHECKER=basic` 時：
@@ -63,11 +106,14 @@ Access Checker 是 gateway 在 JWT 驗證通過、且 Allowed Queries 未放行�
 
 | 類型 | 說明 |
 | --- | --- |
-| `AccessChecker` | 每個請求建立一個實例；實作 `checkAccess(request)` |
-| `AccessCheckerFactory` | thread-safe；從 JWT 等 context 建立 `AccessChecker` |
-| `AccessCheckerCreateContext` | Factory 可用依賴：`jwt`、`patientFinder`、（選用）`httpFhirClient` |
+| `AccessChecker` | 每個請求建立一個實例；實作 `checkAccess(request)`，可選實作 `prepare(request)`（見下方 [fhirBackend](#access-checker)） |
+| `AccessCheckerFactory` | thread-safe；從 LaunchContext 等 context 建立 `AccessChecker` |
+| `AccessCheckerCreateContext` | Factory 可用依賴：`launch`、`patientFinder`、（選用）`fhirBackend` |
 | `FhirRequestDetails` | 請求摘要：`requestPath`、`requestType`、`queryParams`、`requestBody?` |
 | `AccessDecision` | 授權結果；可選附帶 mutation / postProcess / audit user |
+| `LaunchContext` | verified token 轉譯出的 IdP 中立 DTO：`subject`、`patientId?`、`patientListId?`、`scopes`、`agent` |
+| `LaunchContextProvider` | 由 verified token 建立 `LaunchContext`；**唯一**知道 claim 名稱的地方 |
+| `ScopeResolver` | 由 token claims 解析 SMART scopes；接受 `scope` 字串與 RFC 9068 `scp` 陣列兩種標準形式 |
 
 請求處理順序（`FhirProxyController`）：
 
@@ -144,16 +190,18 @@ createApp({ tokenVerifier, config: { ...config, accessChecker: "my-checker" }, a
 
 ### Factory 常用依賴
 
-**JWT claims**
+**LaunchContext**
 
 ```typescript
-import { getJwtClaimOrFail, getJwtClaimIdOrFail } from "../utils/jwt-claim.util";
-
-const scopes = getJwtClaimOrFail(context.jwt.payload, "scope");
-const patientId = getJwtClaimIdOrFail(context.jwt.payload, "patient");
+const scopes = context.launch.scopes;
+const patientId = context.launch.patientId; // string | undefined
+const patientListId = context.launch.patientListId; // string | undefined
+const agent = context.launch.agent; // { authorizedParty?, issuer?, tokenId?, subject?, displayName? }
 ```
 
-JWT claim 解析失敗應拋 `AuthenticationError`（回 401）；請求格式錯誤拋 `InvalidRequestError`（回 400）。
+Access checker **不得**直接讀 raw JWT claims；claim 名稱只存在於 `LaunchContextProvider`（`src/services/launch-context.service.ts` 的 `LAUNCH_CLAIM_NAMES`）。自訂 checker 需要新的 token 欄位時，擴充 `LaunchContext` 與 provider，不要在 checker 裡加 `payload[claim]`。
+
+Launch context 欄位缺少或格式錯誤時拋 `AuthenticationError`（回 401），訊息會命名缺少的邏輯欄位；請求格式錯誤拋 `InvalidRequestError`（回 400）。
 
 **PatientFinder**
 
@@ -170,9 +218,17 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 );
 ```
 
-**HttpFhirClient**（需主動傳入 context）
+**fhirBackend**（非同步，供 checker 在授權前查詢 backend）
 
-若 checker 需在授權階段查詢 backend（如 `list` checker 驗證 List membership），Factory 需 `httpFhirClient`。目前 `FhirProxyController` 尚未將其注入 `create()` context；自訂整合時請在 controller 或 route deps 中補上。單元測試可直接注入 mock client（參考 `tests/helpers/mock-http-fhir-client.ts`）。
+若 checker 需在授權階段查詢 backend（如 `list` checker 驗證 FHIR List membership），Factory 可取用 context 的 `fhirBackend`。`checkAccess` 是同步契約，因此實際的 backend 請求發生在 `AccessChecker.prepare(request)`：`FhirProxyController` 在 `checkAccess` 前 `await` 它，內建的 `list` checker 以 `CachedFhirClient` 預載同步判斷所需的全部查詢結果；預載後仍查不到的查詢一律走拒絕路徑。單元測試可直接注入同步 mock client（參考 `tests/helpers/mock-http-fhir-client.ts`）。
+
+預載時同時對外發出的查詢有上限（每次 8 筆），避免單一 transaction bundle 帶入數百個 patient 就驅動同等數量的並行 backend 請求。
+
+`ACCESS_CHECKER=list` 之外，若自訂 checker 也要在授權階段查 backend，`createApp` 預設不會為它建立 `FhirBackendService`；請在建構時自行注入 `fhirBackend`。
+
+**GCP 部署的 backend 憑證**
+
+`BACKEND_TYPE=GCP` 時，轉發請求、list mode 的 FHIR List membership 查詢、以及把新建成 Patient 加回 access List 的 PATCH，都使用同一組 ADC（Application Default Credentials）access token。token 會過期，因此每次請求前重新解析；轉發用的 token 在**送出前**才解析，授權階段的 backend 查詢則在 checker `prepare` 期間解析，兩者都走同一個分類。gateway 取不到 ADC 時（metadata server 故障、service account 不存在等）該請求以 **503** 收場，不是 401：這是 gateway 自己的故障，重新登入不可能修好。`google-auth-library` 的原始錯誤訊息可能帶著本機檔案路徑，因此只寫進 server log，對外只回固定的 `BackendCredentialError` 訊息。upstream FHIR 自己的失敗（5xx、連線失敗）維持原本的狀態與內容，不會被當成憑證故障。
 
 **SMART Scope**
 
@@ -182,17 +238,18 @@ const bodyPatients = context.patientFinder.findPatientsInResource(
 
 | 拋出 | HTTP | 情境 |
 | --- | --- | --- |
-| `AuthenticationError` | 401 | JWT claim 缺失、scope 不足、Factory 初始化失敗 |
+| `AuthenticationError` | 401 | Launch context 欄位缺失、scope 不足、Factory 初始化失敗 |
 | `InvalidRequestError` | 400 | 請求 body / path 無法解析 |
 | `accessDenied()` | 403 | 授權邏輯判定拒絕（不拋例外） |
+| `BackendCredentialError` | 503 | gateway 自己的 backend 憑證（ADC）無法取得 |
 
 ### 內建 Checker 一覽
 
 | 名稱 | `ACCESS_CHECKER` | 說明 |
 | --- | --- | --- |
 | Permissive | `permissive` | DEV only；有效 JWT 即放行 |
-| List | `list` | 依 JWT `patient_list` claim 限制可存取的 Patient 集合 |
-| Patient | `patient` | SMART patient/user/system scope + patient claim 綁定 |
+| List | `list` | 依 launch context 的 patient-list id 限制可存取的 Patient 集合 |
+| Patient | `patient` | SMART patient/user/system scope + launch context 的 patient id 綁定 |
 | Basic | `basic` | SMART scope CRUDS 合併檢查，不綁 patient |
 
 實作參考：
@@ -220,7 +277,8 @@ cp env.example .env
 常用選填：
 
 - `RUN_MODE`：`PROD`（預設）或 `DEV`（容忍 JWT `iss` 與 `TOKEN_ISSUER` 不同）
-- `ALLOW_TOKEN_ISSUER_HOST_MISMATCH`：`true` 時，PROD 下允許 JWT `iss` 的 host 與 `TOKEN_ISSUER` 不同、但 realm path 相同（預設 `false`）
+- `SIGNING_KEY_SOURCE`：驗簽金鑰來源（trust path）：`auto`（預設）、`jwks`、`keycloak-public-key`。見 [Identity Provider（驗簽金鑰來源）](#identity-provider驗簽金鑰來源)
+- `ALLOW_TOKEN_ISSUER_HOST_MISMATCH`：**Keycloak 專屬**。`true` 時，PROD 下允許 JWT `iss` 的 host 與 `TOKEN_ISSUER` 不同、但 realm path 相同（預設 `false`）
 - `PORT`：HTTP listen port（預設 `3000`）
 - `WELL_KNOWN_ENDPOINT`：預設 `.well-known/openid-configuration`
 - `ALLOWED_QUERIES_FILE`：Allowed Queries JSON 檔案路徑（見下方 [Allowed Queries 設定檔](#allowed-queries-設定檔)）

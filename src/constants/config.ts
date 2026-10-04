@@ -10,6 +10,8 @@ export const ENV_KEYS = {
     PORT: "PORT",
     /** When true, JWT iss may differ from TOKEN_ISSUER host if realm path matches. */
     ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "ALLOW_TOKEN_ISSUER_HOST_MISMATCH",
+    /** 驗簽金鑰來源：jwks | keycloak-public-key | auto */
+    SIGNING_KEY_SOURCE: "SIGNING_KEY_SOURCE",
 } as const;
 
 export const DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH = false;
@@ -17,6 +19,11 @@ export const DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH = false;
 export const DEFAULT_WELL_KNOWN_ENDPOINT = ".well-known/openid-configuration";
 export const DEFAULT_RUN_MODE = "PROD";
 export const DEFAULT_PORT = 3000;
+
+export const SIGNING_KEY_SOURCES = ["jwks", "keycloak-public-key", "auto"] as const;
+export type SigningKeySource = (typeof SIGNING_KEY_SOURCES)[number];
+
+export const DEFAULT_SIGNING_KEY_SOURCE: SigningKeySource = "auto";
 
 export const BACKEND_TYPES = ["HAPI", "GCP"] as const;
 export type BackendType = (typeof BACKEND_TYPES)[number];

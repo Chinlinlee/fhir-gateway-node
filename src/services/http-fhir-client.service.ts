@@ -1,6 +1,8 @@
 import { request } from "undici";
 
 import type { BackendType } from "../constants/config";
+import { BackendCredentialError } from "../errors/backend-credential.error";
+import { formatErrorMessage } from "../utils/format-error.util";
 import { withNoCacheHeaders } from "../utils/http-no-cache.util";
 
 export const RESPONSE_HEADERS_TO_KEEP = new Set<string>([
@@ -143,7 +145,7 @@ export class HttpFhirClientService {
         }
 
         if (this.backendType === "GCP") {
-            const token = this.getGcpAccessToken ? await this.getGcpAccessToken() : "";
+            const token = await this.resolveGcpAccessToken();
             if (token.length > 0) {
                 headers.Authorization = `Bearer ${token}`;
             }
@@ -152,5 +154,25 @@ export class HttpFhirClientService {
 
         // HAPI: strip client JWT and omit Authorization header
         return withNoCacheHeaders(headers);
+    }
+
+    /**
+     * 解析 gateway 自己的 backend 憑證（Google ADC）。取得失敗是 gateway 端的故障，
+     * 因此一律轉成 `BackendCredentialError`，原始錯誤只寫進 server log。
+     * 只有憑證解析會這樣分類：upstream FHIR 的失敗不在這裡發生，維持原本的處理。
+     */
+    private async resolveGcpAccessToken(): Promise<string> {
+        try {
+            return this.getGcpAccessToken ? await this.getGcpAccessToken() : "";
+        } catch (error) {
+            if (error instanceof BackendCredentialError) {
+                // provider 已經記錄過原始原因，這裡只負責把它升級成 backend 憑證故障。
+                throw error;
+            }
+            console.error(
+                `[http-fhir-client] cannot resolve the FHIR backend credential: ${formatErrorMessage(error)}`,
+            );
+            throw new BackendCredentialError(error);
+        }
     }
 }

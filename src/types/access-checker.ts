@@ -2,8 +2,8 @@ import type { AccessDecision } from "./access-decision";
 import type { BundlePatients } from "./bundle-patients";
 import type { FhirBundle } from "./fhir-bundle";
 import type { FhirRequestDetails } from "./fhir-request";
-import type { HttpFhirClientLike } from "./http-fhir-client";
-import type { VerifiedJwt } from "./verified-jwt";
+import type { AsyncFhirClientLike } from "./http-fhir-client";
+import type { LaunchContext } from "./launch-context";
 
 export type { AccessDecision, AuditUserWho, FhirProxyResponse } from "./access-decision";
 export type { RequestMutation } from "./request-mutation";
@@ -19,17 +19,27 @@ export type PatientFinderLike = {
 };
 
 /**
- * 建立 AccessChecker 所需依賴（HttpFhirClient 等於 Phase 7 補上）。
- * Dependencies for creating an AccessChecker (HttpFhirClient etc. in Phase 7).
+ * 建立 AccessChecker 所需依賴。
+ * Dependencies for creating an AccessChecker.
+ * Access checkers read the IdP-neutral LaunchContext, never raw JWT claims.
  */
 export type AccessCheckerCreateContext = {
-    jwt: VerifiedJwt;
+    launch: LaunchContext;
     patientFinder: PatientFinderLike;
-    httpFhirClient?: HttpFhirClientLike;
+    /**
+     * 非同步 FHIR client。List checker 在 `prepare` 階段用它預載同步 client 所需的查詢結果。
+     * Asynchronous FHIR client; list mode resolves its membership queries through it.
+     */
+    fhirBackend?: AsyncFhirClientLike;
 };
 
 /** 每請求一個實例；對齊 Java AccessChecker。 */
 export type AccessChecker = {
+    /**
+     * 選用：同步 checkAccess 之前的非同步解析（例：預載 FHIR List membership）。
+     * Optional asynchronous resolution awaited by the proxy controller before checkAccess.
+     */
+    prepare?: (request: FhirRequestDetails) => Promise<void>;
     checkAccess: (request: FhirRequestDetails) => AccessDecision;
 };
 

@@ -13,16 +13,20 @@ import { AuditEventService } from "./services/audit-event.service";
 import { FhirBackendService } from "./services/fhir-backend.service";
 import { GcpAccessTokenProviderService } from "./services/gcp-access-token-provider.service";
 import { HttpFhirClientService } from "./services/http-fhir-client.service";
+import { defaultLaunchContextProvider } from "./services/launch-context.service";
 import { PatientFinderService } from "./services/patient-finder.service";
 import type { TokenVerifierService } from "./services/token-verifier.service";
+import type { LaunchContextProvider } from "./types/launch-context";
 
 export type CreateAppOptions = {
     tokenVerifier?: TokenVerifierService;
+    launchContextProvider?: LaunchContextProvider;
     config?: GatewayConfig;
     allowedQueries?: AllowedQueriesCheckerService;
     accessCheckerRegistry?: AccessCheckerRegistryService;
     patientFinder?: PatientFinderService;
     httpFhirClient?: HttpFhirClientService;
+    fhirBackend?: FhirBackendService;
     auditEventService?: AuditEventService;
 };
 
@@ -35,24 +39,37 @@ export const createApp = (options?: CreateAppOptions) => {
     }
 
     if (options?.tokenVerifier && options.config) {
+        const config = options.config;
+        // FhirBackendService 只在真的有人要用時才建立：AuditEventService 與 list checker。
+        const fhirBackend =
+            options.fhirBackend ??
+            (options.auditEventService === undefined || config.accessChecker === "list"
+                ? new FhirBackendService({
+                      baseUrl: config.proxyTo,
+                      ...(gcpTokenProvider ? { getBearerToken: () => gcpTokenProvider.getAccessToken() } : {}),
+                  })
+                : undefined);
         app.use(
             fhirRoute({
-                config: options.config,
+                config,
                 tokenVerifier: options.tokenVerifier,
+                launchContextProvider: options.launchContextProvider ?? defaultLaunchContextProvider,
+                ...(fhirBackend ? { fhirBackend } : {}),
                 allowedQueries:
-                    options.allowedQueries ??
-                    AllowedQueriesCheckerService.loadFromFile(options.config.allowedQueriesFile),
+                    options.allowedQueries ?? AllowedQueriesCheckerService.loadFromFile(config.allowedQueriesFile),
                 accessCheckerRegistry: options.accessCheckerRegistry ?? createDefaultAccessCheckerRegistry(),
                 patientFinder: options.patientFinder ?? PatientFinderService.getInstance(),
                 httpFhirClient:
                     options.httpFhirClient ??
                     new HttpFhirClientService({
-                        proxyTo: options.config.proxyTo,
-                        backendType: options.config.backendType,
+                        proxyTo: config.proxyTo,
+                        backendType: config.backendType,
+                        // GCP 轉發與後端查詢共用同一組 ADC；未提供時建構即失敗。
                         ...(gcpTokenProvider ? { getGcpAccessToken: () => gcpTokenProvider.getAccessToken() } : {}),
                     }),
-                auditEventService:
-                    options.auditEventService ?? new AuditEventService(new FhirBackendService({ baseUrl: options.config.proxyTo })),
+                ...(options.auditEventService || !fhirBackend
+                    ? {}
+                    : { auditEventService: new AuditEventService(fhirBackend) }),
             }),
         );
     }

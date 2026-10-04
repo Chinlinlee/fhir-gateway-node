@@ -4,15 +4,8 @@ import type { AccessDecision } from "../../types/access-decision";
 import type { FhirBundleEntry } from "../../types/fhir-bundle";
 import type { FhirRequestDetails } from "../../types/fhir-request";
 import { getResourceIdOrNull, isSameResourceType, parseResourcePath } from "../../utils/fhir.util";
-import { getJwtClaimOrFail } from "../../utils/jwt-claim.util";
-import {
-    extractSmartFhirScopesFromTokens,
-    MergedSmartScopeChecker,
-    resolveSmartScopePrincipal,
-    SmartScopePermission,
-} from "../smart-scope.service";
+import { MergedSmartScopeChecker, resolveSmartScopePrincipal, SmartScopePermission } from "../smart-scope.service";
 import { deniedAccessDecision, grantedAccessDecision, parseRequestBundle } from "./list-access-checker.util";
-import { SCOPES_CLAIM } from "./patient-access-checker.service";
 
 export class BasicAccessCheckerService implements AccessChecker {
     private readonly smartScopeChecker: MergedSmartScopeChecker;
@@ -50,14 +43,10 @@ export class BasicAccessCheckerService implements AccessChecker {
         }
 
         if (resourceId) {
-            return grantedAccessDecision(
-                this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.READ),
-            );
+            return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.READ));
         }
 
-        return grantedAccessDecision(
-            this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.SEARCH),
-        );
+        return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.SEARCH));
     }
 
     private processPost(request: FhirRequestDetails): AccessDecision {
@@ -74,9 +63,7 @@ export class BasicAccessCheckerService implements AccessChecker {
             return deniedAccessDecision();
         }
 
-        return grantedAccessDecision(
-            this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.CREATE),
-        );
+        return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.CREATE));
     }
 
     private processUpdate(request: FhirRequestDetails): AccessDecision {
@@ -102,9 +89,7 @@ export class BasicAccessCheckerService implements AccessChecker {
             return deniedAccessDecision();
         }
 
-        return grantedAccessDecision(
-            this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.UPDATE),
-        );
+        return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.UPDATE));
     }
 
     private processDelete(request: FhirRequestDetails): AccessDecision {
@@ -117,9 +102,7 @@ export class BasicAccessCheckerService implements AccessChecker {
             return deniedAccessDecision();
         }
 
-        return grantedAccessDecision(
-            this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.DELETE),
-        );
+        return grantedAccessDecision(this.smartScopeChecker.hasPermission(resourceName, SmartScopePermission.DELETE));
     }
 
     private processBundle(request: FhirRequestDetails): AccessDecision {
@@ -196,11 +179,9 @@ export class BasicAccessCheckerService implements AccessChecker {
 
 export const basicAccessCheckerFactory: AccessCheckerFactory = {
     create(context: AccessCheckerCreateContext): AccessChecker {
-        const scopesClaim = getJwtClaimOrFail(context.jwt.payload, SCOPES_CLAIM);
-        const scopes = extractSmartFhirScopesFromTokens(scopesClaim.split(/\s+/));
-        const scopePrincipal = resolveSmartScopePrincipal(scopes);
-        if (!scopePrincipal) {
-            throw new AuthenticationError("No SMART FHIR scopes found in JWT scope claim");
+        const scopes = context.launch.scopes;
+        if (!resolveSmartScopePrincipal(scopes)) {
+            throw new AuthenticationError("No SMART FHIR scopes found in launch context");
         }
 
         return new BasicAccessCheckerService(new MergedSmartScopeChecker(scopes));

@@ -1,14 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { defaultUserWhoFromJwt } from "../src/types/access-decision";
+import { defaultUserWhoFromLaunch } from "../src/types/access-decision";
 
-describe("defaultUserWhoFromJwt", () => {
-    it("prefers subject_name over name for display", () => {
-        const who = defaultUserWhoFromJwt({
-            sub: "user-123",
-            iss: "https://issuer.example",
-            subject_name: "IHE Name",
-            name: "OIDC Name",
+describe("defaultUserWhoFromLaunch", () => {
+    it("carries the launch agent display name through to the audit user", () => {
+        const who = defaultUserWhoFromLaunch({
+            subject: "user-123",
+            issuer: "https://issuer.example",
+            displayName: "IHE Name",
         });
         expect(who?.display).toBe("IHE Name");
         expect(who?.identifier).toEqual({
@@ -18,6 +17,6 @@ describe("defaultUserWhoFromJwt", () => {
     });
 
     it("returns null when sub and iss are both missing", () => {
-        expect(defaultUserWhoFromJwt({})).toBeNull();
+        expect(defaultUserWhoFromLaunch({})).toBeNull();
     });
 });

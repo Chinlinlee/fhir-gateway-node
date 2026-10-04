@@ -1,6 +1,5 @@
-import type { JWTPayload } from "jose";
-
 import type { FhirRequestDetails } from "./fhir-request";
+import type { LaunchAgent } from "./launch-context";
 import type { RequestMutation } from "./request-mutation";
 
 /** 後端成功回應後供 postProcess 使用（Phase 7 擴充）。 */
@@ -21,8 +20,16 @@ export type AuditUserWho = {
 
 export type AccessDecision = {
     canAccess: () => boolean;
+    /**
+     * postProcess 可能需要等待 backend 寫入（例如把新建立的 Patient 加回 access List），
+     * 因此允許回傳 Promise；呼叫端必須 await。
+     * May be asynchronous because it can write back to the backend.
+     */
     getRequestMutation?: (request: FhirRequestDetails) => RequestMutation | null | undefined;
-    postProcess?: (request: FhirRequestDetails, response: FhirProxyResponse) => string | null | undefined;
+    postProcess?: (
+        request: FhirRequestDetails,
+        response: FhirProxyResponse,
+    ) => string | null | undefined | Promise<string | null | undefined>;
     getUserWho?: (request: FhirRequestDetails) => AuditUserWho | null | undefined;
 };
 
@@ -56,29 +63,15 @@ export function accessDecisionWithMutation(
     };
 }
 
-const CLAIM_IHE_SUBJECT_NAME = "subject_name";
-const CLAIM_NAME = "name";
-const CLAIM_SUBJECT = "sub";
-const CLAIM_ISSUER = "iss";
-
-function claimAsString(payload: JWTPayload, key: string): string {
-    const value = payload[key];
-    return typeof value === "string" ? value : "";
-}
-
-/** 預設 audit user；對齊 Java AccessDecision.getUserWho() default。 */
-export function defaultUserWhoFromJwt(payload: JWTPayload): AuditUserWho | null {
-    const subject = claimAsString(payload, CLAIM_SUBJECT);
-    const issuer = claimAsString(payload, CLAIM_ISSUER);
+/** 預設 audit user；對齊 Java AccessDecision.getUserWho() default，改讀 launch context 的 agent 欄位。 */
+export function defaultUserWhoFromLaunch(agent: LaunchAgent): AuditUserWho | null {
+    const subject = agent.subject ?? "";
+    const issuer = agent.issuer ?? "";
     if (subject.length === 0 && issuer.length === 0) {
         return null;
     }
 
-    let display = claimAsString(payload, CLAIM_IHE_SUBJECT_NAME);
-    if (display.length === 0) {
-        display = claimAsString(payload, CLAIM_NAME);
-    }
-
+    const display = agent.displayName ?? "";
     const who: AuditUserWho = {
         resourceType: "Practitioner",
         ...(display.length > 0 ? { display } : {}),

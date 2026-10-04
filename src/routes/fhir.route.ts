@@ -10,12 +10,18 @@ import type { HttpFhirClientService } from "../services/http-fhir-client.service
 import type { PatientFinderService } from "../services/patient-finder.service";
 import type { TokenVerifierService } from "../services/token-verifier.service";
 
+import type { AsyncFhirClientLike } from "../types/http-fhir-client";
+import type { LaunchContextProvider } from "../types/launch-context";
+
 export type FhirRouteDeps = {
     config: GatewayConfig;
     tokenVerifier: TokenVerifierService;
+    /** 非同步 FHIR client；list checker 於 prepare 階段用它查詢 backend。 */
+    fhirBackend?: AsyncFhirClientLike;
     httpFhirClient: HttpFhirClientService;
     allowedQueries: AllowedQueriesCheckerService;
     accessCheckerRegistry: AccessCheckerRegistryService;
+    launchContextProvider: LaunchContextProvider;
     patientFinder: PatientFinderService;
     auditEventService?: AuditEventService;
 };

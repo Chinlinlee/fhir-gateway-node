@@ -4,17 +4,15 @@ import { patientAccessCheckerFactory } from "../src/services/access-checkers/pat
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { PATIENT_AUTHORIZED, PATIENT_NON_AUTHORIZED } from "./helpers/access-checker-fixture";
 import { buildFhirRequest } from "./helpers/fhir-request";
+import { launchContextFromClaims } from "./helpers/launch-context-fixture";
 
 describe("PatientAccessChecker use cases", () => {
     it("supports mixed system and patient scopes by resource type", () => {
         const checker = patientAccessCheckerFactory.create({
-            jwt: {
-                payload: {
-                    patient: PATIENT_AUTHORIZED,
-                    scope: "system/*.r patient/*.rs",
-                },
-                protectedHeader: { alg: "RS256" },
-            },
+            launch: launchContextFromClaims({
+                patient: PATIENT_AUTHORIZED,
+                scope: "system/*.r patient/*.rs",
+            }),
             patientFinder: PatientFinderService.getInstance(),
         });
 

@@ -10,13 +10,14 @@ export type HttpFetchFn = typeof undiciFetch;
 export class HttpUtil {
     constructor(private readonly fetchFn: HttpFetchFn = undiciFetch) {}
 
-    async getText(url: string): Promise<string> {
+    async getText(url: string, options?: { timeoutMs?: number }): Promise<string> {
         const response = await this.fetchFn(url, {
             ...HTTP_NO_CACHE_FETCH_OPTIONS,
             headers: {
                 ...HTTP_NO_CACHE_HEADERS,
                 "Accept-Charset": "utf-8",
             },
+            ...(options?.timeoutMs === undefined ? {} : { signal: AbortSignal.timeout(options.timeoutMs) }),
         });
 
         if (response.status < 200 || response.status >= 300) {
