@@ -49,16 +49,33 @@ describe("InMemoryLaunchContextStore", () => {
         expect(await store.bind(created.launchId, "user-1", "app-1")).toBeUndefined();
     });
 
-    it("does not overwrite an existing binding when a launch id is bound again", async () => {
+    it("lets one subject re-launch the same app, and the coarse key follows the newer launch", async () => {
         const store = new InMemoryLaunchContextStore();
         const first = await store.create({ patientId: "456", ttlSeconds: 300 });
         const second = await store.create({ patientId: "789", ttlSeconds: 300 });
         await store.bind(first.launchId, "user-1", "app-1");
+        await store.attachAccessToken("token-issued-for-first", first.launchId);
 
         const rebound = await store.bind(second.launchId, "user-1", "app-1");
 
-        expect(rebound).toBeUndefined();
-        expect((await store.get("user-1", "app-1"))?.patientId).toBe("456");
+        // 看完病人 A 再從病人 B 的頁面開同一個 App 是日常，不是拒絕的理由。
+        expect(rebound?.patientId).toBe("789");
+        expect((await store.get("user-1", "app-1"))?.patientId).toBe("789");
+        // 已經發出去的 token 仍解析到它被發放時的那一次 launch，不會被這次重新綁定改指向。
+        expect((await store.getByAccessToken("token-issued-for-first"))?.patientId).toBe("456");
+    });
+
+    it("stops resolving a launch context once the bound TTL has passed", async () => {
+        let now = 1_000_000;
+        const store = new InMemoryLaunchContextStore(() => now, 3600);
+        const created = await store.create({ patientId: "456", ttlSeconds: 300 });
+        await store.bind(created.launchId, "user-1", "app-1");
+        await store.attachAccessToken("token-1", created.launchId);
+
+        now += 3600_000;
+
+        expect(await store.getByAccessToken("token-1")).toBeUndefined();
+        expect(await store.get("user-1", "app-1")).toBeUndefined();
     });
 
     it("consumes the launch id on binding so it cannot be reused by another subject", async () => {

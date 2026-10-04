@@ -32,6 +32,11 @@ export const GatewayConfigSchema = z.object({
     /** 未綁定 launch context 的 TTL（秒）；未設定時由解析層填入預設值。 */
     launchContextTtlSeconds: z.number().int().min(1).optional(),
     /**
+     * 已綁定 launch context 的 TTL（秒）；未設定時由解析層填入預設值（ADR-0004 的 4 小時）。
+     * 與未綁定的 TTL 分開設定：兩者服務的是生命週期的不同階段（spec Module 6）。
+     */
+    launchContextBoundTtlSeconds: z.number().int().min(1).optional(),
+    /**
      * launch context store 的實作；未設定時由解析層填入 in-memory。選 valkey 而缺 URL 時啟動失敗。
      */
     launchContextStoreType: z.union(LAUNCH_CONTEXT_STORE_TYPES.map((type) => z.literal(type))).optional(),

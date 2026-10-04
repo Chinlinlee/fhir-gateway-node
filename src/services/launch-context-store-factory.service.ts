@@ -1,5 +1,5 @@
 import type { GatewayConfig } from "../configs/env.schema";
-import { DEFAULT_LAUNCH_CONTEXT_STORE, ENV_KEYS } from "../constants/config";
+import { DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS, DEFAULT_LAUNCH_CONTEXT_STORE, ENV_KEYS } from "../constants/config";
 import { StartupConnectionError } from "../errors/startup-connection.error";
 import type { LaunchContextStore } from "../types/launch-context-store";
 import { formatErrorMessage } from "../utils/format-error.util";
@@ -27,7 +27,10 @@ export async function createLaunchContextStore(
 ): Promise<LaunchContextStore> {
     if ((config.launchContextStoreType ?? DEFAULT_LAUNCH_CONTEXT_STORE) !== "valkey") {
         warnInMemoryStoreIsNotForProduction(config);
-        return new InMemoryLaunchContextStore();
+        return new InMemoryLaunchContextStore(
+            () => Date.now(),
+            config.launchContextBoundTtlSeconds ?? DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS,
+        );
     }
 
     // `parseLaunchContextValkeyUrl` 已經擋掉「選 valkey 卻沒給 URL」；這裡是型別上的收斂。
@@ -68,7 +71,11 @@ export async function createLaunchContextStore(
         );
     }
 
-    return new ValkeyLaunchContextStore(client);
+    return new ValkeyLaunchContextStore(
+        client,
+        () => Date.now(),
+        config.launchContextBoundTtlSeconds ?? DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS,
+    );
 }
 
 /**

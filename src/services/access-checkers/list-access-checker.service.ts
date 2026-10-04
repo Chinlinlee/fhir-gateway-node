@@ -11,7 +11,7 @@ import type { BundlePatients } from "../../types/bundle-patients";
 import type { FhirRequestDetails } from "../../types/fhir-request";
 import type { HttpFhirClientLike } from "../../types/http-fhir-client";
 import { getResourceIdOrNull, isSameResourceType, isValidFhirId, parseResourcePath } from "../../utils/fhir.util";
-import { getLaunchIdOrFail } from "../../utils/launch-context.util";
+import { getPatientReferenceOrFail } from "../../utils/launch-context.util";
 import { CachedFhirClient } from "./cached-fhir-client";
 import {
     accessGrantedAndUpdateListForBundle,
@@ -315,7 +315,7 @@ export const listAccessCheckerFactory: AccessCheckerFactory = {
             throw new AuthenticationError("ListAccessChecker requires fhirBackend");
         }
 
-        const patientListId = getLaunchIdOrFail(context.launch, "patientListId");
+        const patientListId = getPatientReferenceOrFail(context.launch, "patientListId");
         return new ListAccessCheckerService(new CachedFhirClient(fhirBackend), patientListId, context.patientFinder);
     },
 };

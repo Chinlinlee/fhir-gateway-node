@@ -56,6 +56,19 @@
 
 **這條路徑對 IdP 有一個硬性要求：access token 必須帶 `jti`（RFC 7519 §4.1.7）。** 沒有 `jti` 的 token 沒有索引鍵，patient／list 模式會拿不到 launch context 而 401——**不會**退化成「沒有病人限制」。
 
+**綁定記錄以 launch id 存放，`(subject, client id)` 只是它的索引。** 兩者的差別在一位醫師
+**對同一個 App 重新 launch** 時才會出現——這是 EHR 的日常，不是邊界情況。若 access token 的
+索引經過 `(subject, client id)`，第二次 launch 就會把第一張已經發出去的 token 改指向另一位病人，
+而且沒有任何徵兆。因此 gateway 在把 token 交給 App 的那一刻記的是**那一筆綁定的 launch id**：
+**已經簽發的 access token 永遠解析到它被簽發時的那位病人**，不論這位醫師之後 launch 多少次。
+refresh 也一樣——refresh token 屬於它被發放時的那次授權，因此換發的 token 接回同一筆綁定。
+
+**多 instance 部署需要 sticky session。** launch context 的綁定放在共享 store，因此每個 instance
+都讀得到；但 authorization flow 的短期狀態（pending authorization、gateway 發出的一次性 code、
+refresh token 的索引）是 process 記憶體裡的東西，不在 store 裡。`authorize` 與 `callback`
+落在不同 instance 上時，callback 會以「Unknown or already completed authorization」失敗。
+把這幾張表也放進 store 會改變 launch context store 的職責範圍，因此留到另外一張票。
+
 ## Consequences
 
 - **`LaunchContext` DTO 的形狀不變**（`subject`／`patientId`／`patientListId`／`scopes`／`agent`）。**只有填入它的函式從「讀 token claim」換成「查 store」。** 但 `LaunchContextProvider.create` 變成非同步：讀 store 是 I/O，這個 interface 的回傳型別因此是 `Promise<LaunchContext>`。介面的名稱、方法、參數與 DTO 欄位都沒變，只有這一個非同步化。

@@ -2,7 +2,7 @@ import { node } from "@elysia/node";
 import { Elysia } from "elysia";
 
 import type { GatewayConfig } from "./configs/env.schema";
-import { DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS } from "./constants/config";
+import { DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS, DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS } from "./constants/config";
 import { corsPlugin } from "./middlewares/cors";
 import { fhirRoute } from "./routes/fhir.route";
 import { healthRoute } from "./routes/health.route";
@@ -52,7 +52,12 @@ export const createApp = (options?: CreateAppOptions) => {
 
     // 內部註冊端點與代理的授權流程共用同一個 store：`authorize` 檢查的 launch id 必須就是
     // EHR 剛建立的那一份，綁定也必須寫進同一份。
-    const launchContextStore = options?.launchContextStore ?? new InMemoryLaunchContextStore();
+    const launchContextStore =
+        options?.launchContextStore ??
+        new InMemoryLaunchContextStore(
+            () => Date.now(),
+            config?.launchContextBoundTtlSeconds ?? DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS,
+        );
 
     // 稽核管道在建構時解析一次，launch lifecycle 與 FHIR 存取共用同一個 AuditEventService
     // （CONTEXT.md 的 Launch AuditEvent 與 Access AuditEvent 共用管道）。

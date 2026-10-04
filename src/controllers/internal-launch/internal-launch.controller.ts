@@ -95,6 +95,7 @@ export abstract class InternalLaunchController {
                         parsed.data.patientId !== undefined
                             ? `Patient/${parsed.data.patientId}`
                             : `List/${parsed.data.patientListId ?? ""}`,
+                    launchId: created.launchId,
                     ...(deps.gatewayBaseUrl !== undefined ? { gatewayBaseUrl: deps.gatewayBaseUrl } : {}),
                 });
             } catch {

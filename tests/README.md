@@ -59,11 +59,15 @@ fixture 也得走 store。三個 helper 都用**真實的** `DefaultLaunchContex
 
 ### `helpers/launch-flow-fixture.ts` — 走完整條 SMART launch 路徑的共用形狀
 
-`startUpstreamServer()`（stub FHIR upstream）、`createBaseConfig()`、`authorizeParams()`、
-`gatewayAuthorize()`、`gatewayToken()`、`locationOf()`、`authenticateAtIdp()`、`signAccessToken()`
-與一組固定常數。`store-backed-launch-context.test.ts`（in-memory）與
-`valkey-launch-context-store.test.ts`（真實 Valkey）走的是同一條路徑，差別只有 store——
-兩邊共用這份 fixture，那個差別才看得出來。
+`startUpstreamServer()`（stub FHIR upstream，同時收集送出的 AuditEvent）、`createBaseConfig()`、
+`authorizeParams()`、`gatewayAuthorize()`、`gatewayToken()`、`locationOf()`、`authenticateAtIdp()`、
+`signAccessToken()`，以及走完整條瀏覽器路徑的 `registerLaunchContext()`／`launch()`／`fhirGet()`，
+加上一組固定常數（`APP_CLIENT_ID`、`CODE_VERIFIER`、`CLINICIAN_SUBJECT`、`APP_AUTHORIZE_SCOPE`…）。
+
+`store-backed-launch-context.test.ts`（in-memory）與 `valkey-launch-context-store.test.ts`（真實
+Valkey）走的是同一條路徑，差別只有 store——兩邊共用這份 fixture，那個差別才看得出來。
+`smart-authorization-flow.test.ts` 與 `launch-audit-event.test.ts` 也用它，因此**不要在個別測試檔
+裡重新宣告同名的參數或 helper**：那份清單會開始漂移，而漂移出來的那一份不會有測試失敗。
 
 ### `tests/valkey-launch-context-store.test.ts` — 需要真實 Valkey 的一組
 

@@ -17,6 +17,9 @@ const BINDING_KEY_SEPARATOR = "\u0000";
  *
  * 一位醫師同時開兩個 App、兩個不同病人是 EHR 的常態，因此這個鍵必須同時含 sub 與 client id；
  * 只用 sub 會讓兩個 App 的請求互相命中對方的病人，而且錯得沒有任何徵兆。
+ *
+ * 這是**粗鍵**：它只記「這組人對這個 App 目前綁到哪一位病人」，因此會被後來的 launch 移動。
+ * access token 的解析不經過它（那條路徑以 launch id 指認，見 `attachAccessToken`）。
  */
 export function launchContextBindingKey(subject: string, clientId: string): string {
     return `${subject}${BINDING_KEY_SEPARATOR}${clientId}`;

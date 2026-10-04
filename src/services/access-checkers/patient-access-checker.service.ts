@@ -9,7 +9,7 @@ import type { AccessDecision } from "../../types/access-decision";
 import type { FhirBundleEntry } from "../../types/fhir-bundle";
 import type { FhirRequestDetails } from "../../types/fhir-request";
 import { getResourceIdOrNull, isSameResourceType, parseResourcePath } from "../../utils/fhir.util";
-import { getLaunchIdOrFail } from "../../utils/launch-context.util";
+import { getPatientReferenceOrFail } from "../../utils/launch-context.util";
 import { LAUNCH_CLAIM_NAMES } from "../launch-context.service";
 import {
     type SmartFhirScope,
@@ -396,7 +396,7 @@ export const patientAccessCheckerFactory: AccessCheckerFactory = {
         let authorizedPatientId: string | null = null;
         if (hasPatientScope) {
             try {
-                authorizedPatientId = getLaunchIdOrFail(context.launch, "patientId");
+                authorizedPatientId = getPatientReferenceOrFail(context.launch, "patientId");
             } catch {
                 if (!hasBroadScope) {
                     throw new AuthenticationError(

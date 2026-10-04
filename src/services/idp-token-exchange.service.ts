@@ -1,6 +1,8 @@
 import { z } from "zod";
+
 import { OAuthError } from "../errors/oauth.error";
 import { HttpUtil } from "../utils/http.util";
+import { parseJson } from "../utils/parse-json.util";
 
 /** IdP 的 token 端點回應；只取 gateway 要轉交給 App 的欄位。 */
 const IdpTokenResponseSchema = z.object({
@@ -73,9 +75,11 @@ export class IdpTokenExchangeService {
 
         const parsed = IdpTokenResponseSchema.safeParse(parseJson(response.body));
         if (response.status < 200 || response.status >= 300 || !parsed.success) {
-            // IdP 的錯誤內容留在日誌；對外只給 App 一個不含內部細節的 OAuth 錯誤。
+            // **只記 status**：IdP 的錯誤回應 body 可能帶著 token、client id 或其他識別碼，
+            // 而這份 body 會經由 `cause` 進入 `oauthErrorResponse` 的 console.error。
+            // 診斷需要的是「哪一步失敗」與狀態碼，不是上游的原文。對 App 的訊息維持不變。
             throw new OAuthError("invalid_grant", "The token exchange with the identity provider failed.", {
-                cause: `token endpoint returned ${response.status}: ${response.body}`,
+                cause: `token endpoint returned ${response.status}`,
             });
         }
 
@@ -86,13 +90,5 @@ export class IdpTokenExchangeService {
             ...(parsed.data.expires_in !== undefined ? { expiresInSeconds: parsed.data.expires_in } : {}),
             ...(parsed.data.scope !== undefined ? { scope: parsed.data.scope } : {}),
         };
-    }
-}
-
-function parseJson(body: string): unknown {
-    try {
-        return JSON.parse(body) as unknown;
-    } catch {
-        return undefined;
     }
 }

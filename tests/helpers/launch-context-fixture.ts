@@ -36,7 +36,7 @@ export async function launchContextWithPatient(patientId: string, claims: JWTPay
     const store = new InMemoryLaunchContextStore();
     const created = await store.create({ patientId, ttlSeconds: 300 });
     await store.bind(created.launchId, FIXTURE_SUBJECT, FIXTURE_CLIENT_ID);
-    await store.attachAccessToken(FIXTURE_TOKEN_ID, FIXTURE_SUBJECT, FIXTURE_CLIENT_ID);
+    await store.attachAccessToken(FIXTURE_TOKEN_ID, created.launchId);
 
     return await new DefaultLaunchContextProvider(store).create({
         payload: { sub: FIXTURE_SUBJECT, jti: FIXTURE_TOKEN_ID, ...claims },
@@ -63,7 +63,7 @@ export async function seedLaunchContextForToken(
             : { patientListId: launch.patientListId ?? "" };
     const created = await store.create({ ttlSeconds: 300, ...target });
     await store.bind(created.launchId, binding.subject, binding.clientId);
-    await store.attachAccessToken(binding.tokenId, binding.subject, binding.clientId);
+    await store.attachAccessToken(binding.tokenId, created.launchId);
 }
 
 /**

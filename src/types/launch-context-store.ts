@@ -38,8 +38,12 @@ export type LaunchContextStore = {
      */
     isAvailable: (launchId: string) => Promise<boolean>;
     /**
-     * 把 launch id 綁到 `(subject, client id)`。已綁定的 launch id 不可重複綁定，
-     * 既有綁定不會被覆寫。
+     * 把 launch id 綁到 `(subject, client id)`。**launch id 單次可用**：同一個 launch id
+     * 第二次綁不回來。
+     *
+     * 同一組 `(subject, client id)` 可以被**重新綁定**：一位醫師看完病人 A 再從病人 B 的頁面
+     * 開同一個 App，是 EHR 的日常，而不是例外。重新綁定只移動「這組鍵目前指向哪一次 launch」，
+     * 不動已經發出去的 access token——見下面 `attachAccessToken` 的說明。
      *
      * 回傳 `undefined` 的三種情形對呼叫端是同一件事——這個 launch id 不存在：
      * 未知 id、已過期、已被綁定過。
@@ -49,22 +53,36 @@ export type LaunchContextStore = {
     /**
      * 把這次授權即將交給 App 的那張 access token（以 IdP 的 `jti` 指認）接上它所屬的綁定。
      *
+     * 參數是 **launch id**，不是 `(subject, client id)`：這是這條路徑存在的理由。
+     * `(subject, client id)` 是粗鍵，它只記「這組人對這個 App 目前綁到哪一位病人」，因此會被
+     * 後來的 launch 移動。若索引經過它，一張已經發出去的 token 就會在醫師下一次 launch 之後
+     * 改指向另一位病人。改以 launch id 指認後，每一張 token 在發出的那一刻就固定綁定，
+     * **之後不論這位醫師再 launch 多少次都解析到同一個病人**。
+     *
      * 由 token endpoint 在**即將把 token 交給 App 的那一刻**呼叫：在此之前這張 token 還沒到
-     * App 手裡，先接上只會留下一筆沒人用得到的索引。`(subject, client id)` 上沒有綁定時
-     * 什麼都不做——沒有綁定的 access token 在授權層本來就會被拒絕。
+     * App 手裡，先接上只會留下一筆沒人用得到的索引。對應的 launch id 沒有綁定時什麼都不做——
+     * 沒有綁定的 access token 在授權層本來就會被拒絕。
      */
-    attachAccessToken: (tokenId: string, subject: string, clientId: string) => Promise<void>;
+    attachAccessToken: (tokenId: string, launchId: string) => Promise<void>;
 
     /**
-     * 依 App 帶來的 access token（JWT `jti`）回讀綁定後的 launch context；查無回傳 `undefined`。
-     * 綁定被刪除後，一併指向它的 access token 也查不到。
+     * 依 App 帶來的 access token（JWT `jti`）回讀綁定後的 launch context；查無或已過期回傳
+     * `undefined`。綁定被刪除或到期後，一併指向它的 access token 也查不到。
      */
     getByAccessToken: (tokenId: string) => Promise<BoundLaunchContext | undefined>;
 
-    /** 依 `(subject, client id)` 回讀綁定後的 launch context；查無回傳 `undefined`。 */
+    /**
+     * 依 `(subject, client id)` 回讀**目前**綁定後的 launch context；查無或已過期回傳 `undefined`。
+     *
+     * 這是粗鍵的讀取側，語意是「這組人對這個 App 現在授權到哪一位病人」，因此會跟著後來的
+     * launch 移動。授權裁決走的是 `getByAccessToken`，不是這個。
+     */
     get: (subject: string, clientId: string) => Promise<BoundLaunchContext | undefined>;
 
-    /** 刪除 `(subject, client id)` 的綁定；原本沒有綁定時回傳 `false`。 */
+    /**
+     * 刪除 `(subject, client id)` 目前指向的那筆綁定，並讓所有指向它的 access token 查不到；
+     * 原本沒有綁定時回傳 `false`。
+     */
     delete: (subject: string, clientId: string) => Promise<boolean>;
 };
 
@@ -95,6 +113,6 @@ export type BoundLaunchContext = {
     /** patient list launch 的 FHIR List id；授權的是清單成員而非單一病人。 */
     patientListId?: string;
     encounterId?: string;
-    /** 綁定發生時間（epoch 毫秒）；綁定後的生命週期由 gateway 自管。 */
+    /** 綁定發生時間（epoch 毫秒）。 */
     boundAt: number;
 };

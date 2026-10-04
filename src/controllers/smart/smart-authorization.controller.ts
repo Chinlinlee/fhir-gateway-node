@@ -1,6 +1,7 @@
 import { SMART_API_PREFIX, SMART_CALLBACK_PATH } from "../../constants/routes";
 import { OAuthError } from "../../errors/oauth.error";
 import type { AuditEventService } from "../../services/audit-event.service";
+import { bindingAuditInput } from "../../services/audit-event.service";
 import { IdpTokenExchangeService } from "../../services/idp-token-exchange.service";
 import type { SmartAuthorizationSessions } from "../../services/smart-authorization-sessions.service";
 import type { TokenVerifierService } from "../../services/token-verifier.service";
@@ -8,6 +9,7 @@ import type { LaunchContextStore } from "../../types/launch-context-store";
 import type { IssuedAuthorization, PendingAuthorization } from "../../types/smart-authorization";
 import type { VerifiedJwt } from "../../types/verified-jwt";
 import { constantTimeEquals } from "../../utils/constant-time.util";
+import { parseJson } from "../../utils/parse-json.util";
 import { createPkcePair, matchesS256Challenge, PKCE_CHALLENGE_METHOD_S256 } from "../../utils/pkce.util";
 import { smartEndpointUrl } from "../../utils/smart-endpoint.util";
 import type { OidcDiscovery } from "../../validations/oidc-discovery.schema";
@@ -149,28 +151,28 @@ export abstract class SmartAuthorizationController {
         // 綁定索引鍵是 `(subject, client id)`：client id 取 App 的，不是 gateway 自己的 IdP
         // client——code exchange 是 gateway 做的，token 的 `azp` 會是 gateway 自己，因此
         // App 的身分只存在於這一次 authorize 記下的 pending 裡。
+        //
+        // 綁不上只有一種情況了：這個 launch id 未知、已過期，或已經被用過（launch id 單次可用）。
+        // 同一組 `(subject, client id)` 已經有綁定**不再**是拒絕的理由——那位醫師只是又從
+        // 另一位病人的頁面開了同一個 App。
         const bound = await deps.store.bind(pending.launchId, subject, pending.clientId);
         if (bound === undefined) {
             throw new OAuthError(
                 "invalid_grant",
-                "The launch could not be bound; it may have expired or already been used.",
+                "The launch could not be bound; it may have expired or was already used.",
             );
         }
 
         // Launch AuditEvent：access token 不再帶病人，誰授權了誰看哪位病人只存在於這筆事件。
         if (deps.auditEventService !== undefined) {
             try {
-                await deps.auditEventService.logLaunch({
-                    phase: "binding",
-                    patientReference:
-                        bound.patientId !== undefined
-                            ? `Patient/${bound.patientId}`
-                            : `List/${bound.patientListId ?? ""}`,
-                    subject,
-                    clientId: pending.clientId,
-                    gatewayBaseUrl: deps.publicBaseUrl,
-                    ...(verified.payload.iss !== undefined ? { issuer: verified.payload.iss } : {}),
-                });
+                await deps.auditEventService.logLaunch(
+                    bindingAuditInput({
+                        bound,
+                        gatewayBaseUrl: deps.publicBaseUrl,
+                        ...(verified.payload.iss !== undefined ? { issuer: verified.payload.iss } : {}),
+                    }),
+                );
             } catch {
                 // 稽核失敗不改變授權結果：綁定已經寫進 store，App 照樣拿得到 code。
                 // 只記固定字串——送不出去的 AuditEvent 帶著病人參照，錯誤物件可能把它帶進日誌。
@@ -183,6 +185,7 @@ export abstract class SmartAuthorizationController {
         const issued: IssuedAuthorization = {
             accessToken: tokens.accessToken,
             subject,
+            launchId: bound.launchId,
             ...(verified.payload.jti !== undefined ? { accessTokenId: verified.payload.jti } : {}),
             ...(tokens.refreshToken !== undefined ? { refreshToken: tokens.refreshToken } : {}),
             tokenType: tokens.tokenType,
@@ -239,7 +242,7 @@ export abstract class SmartAuthorizationController {
             throw new OAuthError("invalid_grant", "The client does not match the authorization request.");
         }
 
-        await attachToBinding(issued.accessTokenId, issued.subject, issued.clientId, deps.store);
+        await attachToBinding(issued.accessTokenId, issued.launchId, deps.store);
         return tokenResponse(issued);
     }
 
@@ -280,7 +283,7 @@ export abstract class SmartAuthorizationController {
             ...(tokens.expiresInSeconds !== undefined ? { expiresInSeconds: tokens.expiresInSeconds } : {}),
         };
         deps.sessions.rotateRefreshToken(refreshToken, refreshed);
-        await attachToBinding(refreshed.accessTokenId, refreshed.subject, refreshed.clientId, deps.store);
+        await attachToBinding(refreshed.accessTokenId, refreshed.launchId, deps.store);
 
         return tokenResponse(refreshed);
     }
@@ -289,20 +292,22 @@ export abstract class SmartAuthorizationController {
 /**
  * 把即將交給 App 的 access token 接上它所屬的綁定。
  *
+ * 以 launch id 而不是 `(subject, client id)` 接：粗鍵會被這位醫師後來的 launch 移動，
+ * 那會讓一張已經發出去的 token 改指向另一位病人——正是這條路徑要防的事。
+ *
  * IdP 沒發 `jti` 時沒有索引鍵，這時不接：該 token 在 patient／list 模式會拿不到 launch
  * context 而被 401，而不是被當成「沒有病人限制」。這是對 IdP 的硬性要求，不是可選行為。
  */
 async function attachToBinding(
     tokenId: string | undefined,
-    subject: string,
-    clientId: string,
+    launchId: string,
     store: LaunchContextStore,
 ): Promise<void> {
     if (tokenId === undefined) {
-        console.error("[smart] the identity provider issued an access token without a jti; it has no launch context");
+        console.error("[smart] IdP 簽發的 access token 沒有 jti，這張 token 沒有 launch context");
         return;
     }
-    await store.attachAccessToken(tokenId, subject, clientId);
+    await store.attachAccessToken(tokenId, launchId);
 }
 
 /** IdP 換發的 access token 若連 gateway 自己都驗不過，這次 refresh 就不能完成。 */
@@ -399,12 +404,4 @@ async function readTokenRequest(request: Request): Promise<URLSearchParams> {
         return form;
     }
     return new URLSearchParams(body);
-}
-
-function parseJson(body: string): unknown {
-    try {
-        return JSON.parse(body) as unknown;
-    } catch {
-        return undefined;
-    }
 }

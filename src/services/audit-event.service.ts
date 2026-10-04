@@ -3,6 +3,7 @@
 import type { AuditUserWho } from "../types/access-decision";
 import type { FhirRequestDetails } from "../types/fhir-request";
 import type { LaunchAgent } from "../types/launch-context";
+import type { BoundLaunchContext } from "../types/launch-context-store";
 import { isValidFhirId, isValidFhirResourceType } from "../utils/fhir.util";
 
 type AuditEventBackend = {
@@ -38,6 +39,11 @@ const LAUNCH_AUDIT_EVENT_SYSTEM = "http://smart-fhir-gateway.example/CodeSystem/
 const LAUNCH_AUDIT_EVENT_TYPE = "launch";
 const LAUNCH_CONTEXT_REGISTERED_SUBTYPE = "launch-context-registered";
 const LAUNCH_CONTEXT_BOUND_SUBTYPE = "launch-context-bound";
+/**
+ * launch context 這個 entity 的 code。註冊與綁定兩則事件都帶一則這樣的 entity，內容是
+ * 同一個 launch id——稽核消費者因此能把兩者配成一對（見 `LaunchAuditEventInput.launchId`）。
+ */
+const LAUNCH_CONTEXT_ENTITY_CODE = "launch-context";
 
 /** operator 未設定 public base URL 時，稽核事件用來指認 gateway 本身的名稱。 */
 const GATEWAY_DISPLAY_NAME = "SMART FHIR Gateway";
@@ -52,6 +58,12 @@ export type LaunchContextRegistrationAuditInput = {
     patientReference: string;
     /** gateway 自己的 public base URL，寫在 observer；operator 未設定時不寫，絕不從 Host header 推導。 */
     gatewayBaseUrl?: string;
+    /**
+     * gateway 生成的 launch id。**這是註冊與綁定兩則事件之間的關聯鍵**：稽核消費者靠它把
+     * 「EHR 註冊了這份 context」與「後來誰被綁定到它」配成一對，回答得出 spec 要求的
+     * 「誰授權了這位醫師看哪位病人」——access token 裡沒有 PHI，這兩則事件是唯一的來源。
+     */
+    launchId: string;
 };
 
 /**
@@ -69,9 +81,37 @@ export type LaunchContextBindingAuditInput = {
     gatewayBaseUrl: string;
     /** 簽出 subject 的 IdP（JWT `iss`）；與 subject 一起構成被授權使用者的識別碼。 */
     issuer?: string;
+    /** 這次授權綁定的 launch id；與註冊事件同一個值，兩者因此可配對。 */
+    launchId: string;
 };
 
 export type LaunchAuditEventInput = LaunchContextRegistrationAuditInput | LaunchContextBindingAuditInput;
+
+/**
+ * 由綁定後的 launch context 組出綁定事件的稽核輸入。
+ *
+ * 這組欄位在 callback 與測試裡都會用到，而「病人參照長什麼樣」只有這裡決定：patient launch
+ * 指向 `Patient/{id}`，list launch 指向 `List/{id}`。讓呼叫端各自組一次，遲早會有一邊漏掉
+ * list 的分支，而稽核軌跡少一則 entity 參照不會報錯。
+ */
+export function bindingAuditInput(input: {
+    bound: BoundLaunchContext;
+    gatewayBaseUrl: string;
+    issuer?: string;
+}): LaunchContextBindingAuditInput {
+    return {
+        phase: "binding",
+        patientReference:
+            input.bound.patientId !== undefined
+                ? `Patient/${input.bound.patientId}`
+                : `List/${input.bound.patientListId ?? ""}`,
+        subject: input.bound.subject,
+        clientId: input.bound.clientId,
+        gatewayBaseUrl: input.gatewayBaseUrl,
+        ...(input.issuer !== undefined ? { issuer: input.issuer } : {}),
+        launchId: input.bound.launchId,
+    };
+}
 
 function isSearchTypeRequest(request: FhirRequestDetails): boolean {
     const normalizedPath = request.requestPath.replace(/^\/+/, "").replace(/\/+$/, "");
@@ -311,7 +351,12 @@ function buildLaunchAuditEvent(input: LaunchAuditEventInput): fhir4.AuditEvent {
         // observer 只放 operator 設定的 base URL：絕不從 request 的 Host 推導，那個 header
         // 由呼叫端控制。未設定 public base URL 的部署以產品名記錄 gateway 本身。
         source: { observer: { display: input.gatewayBaseUrl ?? GATEWAY_DISPLAY_NAME } },
-        entity: [{ what: { reference: input.patientReference } }],
+        entity: [
+            { what: { reference: input.patientReference } },
+            // launch id 放進 entity.name 而不是 `what`：它不是任何 FHIR 資源的參照，因此沒有
+            // 可指去的資源型別。`name` 正是「用來在查詢中辨識這則事件的實體名稱」這個位置。
+            { type: { system: LAUNCH_AUDIT_EVENT_SYSTEM, code: LAUNCH_CONTEXT_ENTITY_CODE }, name: input.launchId },
+        ],
     };
 }
 

@@ -4,7 +4,6 @@ import { createApp } from "../src/app";
 import { ConfigError, loadGatewayConfig, minimalValidEnv } from "../src/configs";
 import type { GatewayConfig } from "../src/configs/env.schema";
 import { ENV_KEYS } from "../src/constants/config";
-import { InMemoryLaunchContextStore } from "../src/services/launch-context-store.service";
 
 const INTERNAL_CREDENTIAL_HEADER = "x-internal-credential";
 const INTERNAL_CREDENTIAL = "ehr-service-credential";
@@ -64,19 +63,6 @@ describe("internal launch context API", () => {
         expect(new Date(body.expiresAt).getTime()).toBeGreaterThan(Date.now());
     });
 
-    it("writes the registered launch context into the store injected at app construction", async () => {
-        const store = new InMemoryLaunchContextStore();
-        const app = createApp({ config: createConfig(), launchContextStore: store });
-
-        const response = await app.handle(registerRequest({ patientId: PATIENT_ID, encounterId: ENCOUNTER_ID }));
-        const body = (await response.json()) as { launchId: string };
-        // 綁定發生在 authorization flow 的 callback（後續票），這裡確認 context 進了注入的 store。
-        const bound = await store.bind(body.launchId, "user-1", "app-1");
-
-        expect(bound?.patientId).toBe(PATIENT_ID);
-        expect(bound?.encounterId).toBe(ENCOUNTER_ID);
-    });
-
     it("accepts a launch context without an encounter", async () => {
         const app = createApp({ config: createConfig() });
 
@@ -86,16 +72,13 @@ describe("internal launch context API", () => {
     });
 
     it("registers a launch context that authorizes a patient list instead of a single patient", async () => {
-        const store = new InMemoryLaunchContextStore();
-        const app = createApp({ config: createConfig(), launchContextStore: store });
+        const app = createApp({ config: createConfig({ accessChecker: "list" }) });
 
         const response = await app.handle(registerRequest({ patientListId: PATIENT_LIST_ID }));
-        const body = (await response.json()) as { launchId: string };
-        const bound = await store.bind(body.launchId, "user-1", "app-1");
 
+        // 端點接受一份只指定清單的註冊。清單模式端到端授權到清單成員的部分，由
+        // `store-backed-launch-context.test.ts` 走完整條 launch 路徑驗證。
         expect(response.status).toBe(201);
-        expect(bound?.patientListId).toBe(PATIENT_LIST_ID);
-        expect(bound?.patientId).toBeUndefined();
     });
 
     it("rejects a registration that names both a patient and a patient list", async () => {

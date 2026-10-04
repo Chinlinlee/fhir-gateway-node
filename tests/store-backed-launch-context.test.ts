@@ -1,10 +1,8 @@
 import { type CryptoKey, decodeJwt, SignJWT } from "jose";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { type App, createApp } from "../src/app";
+import { createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
-import { FHIR_API_PREFIX } from "../src/constants/routes";
-import { INTERNAL_CREDENTIAL_HEADER } from "../src/controllers/internal-launch/internal-launch.controller";
 import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
 import { InMemoryLaunchContextStore } from "../src/services/launch-context-store.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
@@ -14,22 +12,20 @@ import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-t
 import { seedLaunchContextForToken, unreachableLaunchContextStore } from "./helpers/launch-context-fixture";
 import {
     APP_CLIENT_ID,
-    APP_REDIRECT_URI,
     AUTHORIZED_PATIENT,
-    authenticateAtIdp,
     authorizeParams,
-    CODE_VERIFIER,
+    CLINICIAN_SUBJECT,
     createBaseConfig,
-    GATEWAY_BASE_URL,
+    fhirGet,
     GATEWAY_IDP_CLIENT_ID,
     GATEWAY_IDP_CLIENT_SECRET,
     gatewayAuthorize,
     gatewayToken,
-    INTERNAL_CREDENTIAL,
-    locationOf,
+    launch,
     OTHER_APP_CLIENT_ID,
     OTHER_PATIENT,
     PATIENT_LIST_ID,
+    registerLaunchContext,
     startUpstreamServer,
     type UpstreamServer,
 } from "./helpers/launch-flow-fixture";
@@ -43,6 +39,9 @@ import {
  * `valkey-launch-context-store.test.ts`。
  */
 
+/** 綁定後的 TTL：短到測試可以用替身時鐘跨過它，又夠長到不會干擾其他案例。 */
+const BOUND_TTL_SECONDS = 3600;
+
 describe("launch context owned by the gateway, over the app seam", () => {
     let issuer: IssuerTestServer;
     let upstream: UpstreamServer;
@@ -54,7 +53,7 @@ describe("launch context owned by the gateway, over the app seam", () => {
             serveAuthorizationFlow: true,
             clientId: GATEWAY_IDP_CLIENT_ID,
             clientSecret: GATEWAY_IDP_CLIENT_SECRET,
-            subject: "clinician-42",
+            subject: CLINICIAN_SUBJECT,
         });
         upstream = await startUpstreamServer();
         tokenVerifier = await TokenVerifierService.create({
@@ -87,80 +86,42 @@ describe("launch context owned by the gateway, over the app seam", () => {
         });
     };
 
-    /** EHR 在 App 開啟前建立 launch context；回傳 gateway 生成的 launch id。 */
-    const registerLaunchContext = async (app: App, body: Record<string, string>): Promise<string> => {
-        const response = await app.handle(
-            new Request("http://localhost/internal/launch-contexts", {
-                method: "POST",
-                headers: { "content-type": "application/json", [INTERNAL_CREDENTIAL_HEADER]: INTERNAL_CREDENTIAL },
-                body: JSON.stringify(body),
-            }),
-        );
-        expect(response.status).toBe(201);
-        const created = (await response.json()) as { launchId: string };
-        return created.launchId;
-    };
-
-    /** 跑完整條瀏覽器路徑並換出 access token；回傳 gateway 自己 token endpoint 發的那組 token。 */
-    const launch = async (
-        app: App,
-        body: Record<string, string>,
-        clientId: string,
-        overrides: Record<string, string> = {},
-    ): Promise<{ accessToken: string; refreshToken: string }> => {
-        const launchId = await registerLaunchContext(app, body);
-        const idpRedirect = await locationOf(
-            await app.handle(gatewayAuthorize(authorizeParams(launchId, { client_id: clientId, ...overrides }))),
-        );
-        const gatewayCallback = await authenticateAtIdp(idpRedirect);
-        const appRedirect = await locationOf(await app.handle(new Request(gatewayCallback, { redirect: "manual" })));
-
-        const tokenResponse = await app.handle(
-            gatewayToken({
-                grant_type: "authorization_code",
-                code: appRedirect.searchParams.get("code") ?? "",
-                redirect_uri: APP_REDIRECT_URI,
-                client_id: clientId,
-                code_verifier: CODE_VERIFIER,
-            }),
-        );
-        expect(tokenResponse.status).toBe(200);
-        const tokens = (await tokenResponse.json()) as { access_token: string; refresh_token: string };
-        return { accessToken: tokens.access_token, refreshToken: tokens.refresh_token };
-    };
-
-    const fhirGet = (app: App, path: string, accessToken: string): Promise<Response> =>
-        app.handle(
-            new Request(`${GATEWAY_BASE_URL}${FHIR_API_PREFIX}${path}`, {
-                headers: { Authorization: `Bearer ${accessToken}` },
-            }),
-        );
-
     /** 自己簽一張 IdP access token；用來測試「不經代理流程」的請求路徑。 */
     const signAccessToken = async (claims: Record<string, string>): Promise<string> =>
         await new SignJWT(claims)
             .setProtectedHeader({ alg: "RS256" })
             .setIssuer(issuer.issuerUrl)
-            .setSubject("clinician-42")
+            .setSubject(CLINICIAN_SUBJECT)
             .sign(issuer.keys.privateKey as CryptoKey);
 
     it("authorizes to the launch context the gateway recorded, with no patient in the access token", async () => {
         const app = buildApp();
-        const { accessToken } = await launch(app, { patientId: AUTHORIZED_PATIENT }, APP_CLIENT_ID);
+        const { access_token: accessToken } = await launch(app, { patientId: AUTHORIZED_PATIENT });
 
         expect(decodeJwt(accessToken).patient).toBeUndefined();
         expect(decodeJwt(accessToken).patient_list).toBeUndefined();
 
-        const allowed = await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken);
-        expect(allowed.status).toBe(200);
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(200);
+        expect((await fhirGet(app, `/Patient/${OTHER_PATIENT}`, accessToken)).status).toBe(403);
+    });
 
-        const denied = await fhirGet(app, `/Patient/${OTHER_PATIENT}`, accessToken);
-        expect(denied.status).toBe(403);
+    it("authorizes the patient the internal launch context endpoint registered, encounter included", async () => {
+        const app = buildApp();
+
+        // 內部端點帶著 encounter 一起註冊時，綁定仍然授權到**那位病人**：就診參照不會蓋掉
+        // 病人參照，也不會讓這次 launch 授權不出去。
+        const { access_token: accessToken } = await launch(app, {
+            patientId: AUTHORIZED_PATIENT,
+            encounterId: "enc-1",
+        });
+
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(200);
+        expect((await fhirGet(app, `/Patient/${OTHER_PATIENT}`, accessToken)).status).toBe(403);
     });
 
     it("forwards the authorized patient to the upstream when it injects the patient search param", async () => {
         const app = buildApp();
-        const { accessToken } = await launch(app, { patientId: AUTHORIZED_PATIENT }, APP_CLIENT_ID);
+        const { access_token: accessToken } = await launch(app, { patientId: AUTHORIZED_PATIENT });
 
         const response = await fhirGet(app, "/Observation", accessToken);
 
@@ -174,18 +135,59 @@ describe("launch context owned by the gateway, over the app seam", () => {
         const second = await launch(app, { patientId: OTHER_PATIENT }, OTHER_APP_CLIENT_ID);
 
         // 同一個 sub、同一個 IdP、兩個 App：token 的 `azp` 兩張都是 gateway 自己。
-        expect(decodeJwt(first.accessToken).sub).toBe(decodeJwt(second.accessToken).sub);
-        expect(decodeJwt(first.accessToken).azp).toBe(GATEWAY_IDP_CLIENT_ID);
+        expect(decodeJwt(first.access_token).sub).toBe(decodeJwt(second.access_token).sub);
+        expect(decodeJwt(first.access_token).azp).toBe(GATEWAY_IDP_CLIENT_ID);
 
-        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, first.accessToken)).status).toBe(200);
-        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, second.accessToken)).status).toBe(403);
-        expect((await fhirGet(app, `/Patient/${OTHER_PATIENT}`, second.accessToken)).status).toBe(200);
-        expect((await fhirGet(app, `/Patient/${OTHER_PATIENT}`, first.accessToken)).status).toBe(403);
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, first.access_token)).status).toBe(200);
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, second.access_token)).status).toBe(403);
+        expect((await fhirGet(app, `/Patient/${OTHER_PATIENT}`, second.access_token)).status).toBe(200);
+        expect((await fhirGet(app, `/Patient/${OTHER_PATIENT}`, first.access_token)).status).toBe(403);
+    });
+
+    it("lets one clinician launch the same app again for another patient", async () => {
+        const app = buildApp();
+
+        await launch(app, { patientId: AUTHORIZED_PATIENT }, APP_CLIENT_ID);
+        const second = await launch(app, { patientId: OTHER_PATIENT }, APP_CLIENT_ID);
+
+        // 第二次 launch 成功，而且拿到的是新那位病人。
+        expect((await fhirGet(app, `/Patient/${OTHER_PATIENT}`, second.access_token)).status).toBe(200);
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, second.access_token)).status).toBe(403);
+    });
+
+    it("never lets a token issued for one patient start authorizing another", async () => {
+        const app = buildApp();
+        const first = await launch(app, { patientId: AUTHORIZED_PATIENT }, APP_CLIENT_ID);
+
+        await launch(app, { patientId: OTHER_PATIENT }, APP_CLIENT_ID);
+
+        // 這是這條路徑的安全前提：第一張 token 在醫師再次 launch 之後**forever** 解析到它被
+        // 發放時的那一筆綁定。若索引經過 `(subject, client id)` 這組粗鍵，這裡就會變成 200。
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, first.access_token)).status).toBe(200);
+        expect((await fhirGet(app, `/Patient/${OTHER_PATIENT}`, first.access_token)).status).toBe(403);
+    });
+
+    it("keeps a refreshed token on the patient its authorization was issued for", async () => {
+        const app = buildApp();
+        const first = await launch(app, { patientId: AUTHORIZED_PATIENT }, APP_CLIENT_ID);
+
+        // 醫師在 refresh 之前又開了同一次 App 的另一次 launch。refresh 屬於第一次授權，
+        // 因此換發的 token 必須接回第一次那筆綁定，而不是這組鍵「目前」指向的那筆。
+        await launch(app, { patientId: OTHER_PATIENT }, APP_CLIENT_ID);
+
+        const refreshResponse = await app.handle(
+            gatewayToken({ grant_type: "refresh_token", refresh_token: first.refresh_token, client_id: APP_CLIENT_ID }),
+        );
+        expect(refreshResponse.status).toBe(200);
+        const refreshed = (await refreshResponse.json()) as { access_token: string };
+
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, refreshed.access_token)).status).toBe(200);
+        expect((await fhirGet(app, `/Patient/${OTHER_PATIENT}`, refreshed.access_token)).status).toBe(403);
     });
 
     it("keeps resolving the launch context after the app refreshes its access token", async () => {
         const app = buildApp();
-        const { refreshToken } = await launch(app, { patientId: AUTHORIZED_PATIENT }, APP_CLIENT_ID);
+        const { refresh_token: refreshToken } = await launch(app, { patientId: AUTHORIZED_PATIENT });
 
         const refreshResponse = await app.handle(
             gatewayToken({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: APP_CLIENT_ID }),
@@ -193,17 +195,15 @@ describe("launch context owned by the gateway, over the app seam", () => {
         expect(refreshResponse.status).toBe(200);
         const refreshed = (await refreshResponse.json()) as { access_token: string };
 
-        const allowed = await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, refreshed.access_token);
-        expect(allowed.status).toBe(200);
-        const denied = await fhirGet(app, `/Patient/${OTHER_PATIENT}`, refreshed.access_token);
-        expect(denied.status).toBe(403);
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, refreshed.access_token)).status).toBe(200);
+        expect((await fhirGet(app, `/Patient/${OTHER_PATIENT}`, refreshed.access_token)).status).toBe(403);
     });
 
     it("ignores a patient claim carried by the access token", async () => {
         const app = buildApp();
         await seedLaunchContextForToken(
             store,
-            { subject: "clinician-42", clientId: APP_CLIENT_ID, tokenId: "token-with-a-patient-claim" },
+            { subject: CLINICIAN_SUBJECT, clientId: APP_CLIENT_ID, tokenId: "token-with-a-patient-claim" },
             { patientId: AUTHORIZED_PATIENT },
         );
         const token = await signAccessToken({
@@ -225,6 +225,31 @@ describe("launch context owned by the gateway, over the app seam", () => {
         expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, token)).status).toBe(401);
     });
 
+    it("refuses a request once the bound launch context has expired", async () => {
+        let now = 1_000_000;
+        const expiringStore = new InMemoryLaunchContextStore(() => now, BOUND_TTL_SECONDS);
+        const app = buildApp({}, expiringStore);
+        const { access_token: accessToken } = await launch(app, { patientId: AUTHORIZED_PATIENT });
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(200);
+
+        now += BOUND_TTL_SECONDS * 1000;
+
+        // 綁定後的 context 也有 TTL：到期之後這張 token 查不到病人，因此是 401 而不是 403。
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(401);
+    });
+
+    it("refuses a list-mode request once the bound launch context has expired", async () => {
+        let now = 1_000_000;
+        const expiringStore = new InMemoryLaunchContextStore(() => now, BOUND_TTL_SECONDS);
+        const app = buildApp({ accessChecker: "list" }, expiringStore);
+        const { access_token: accessToken } = await launch(app, { patientListId: PATIENT_LIST_ID });
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(200);
+
+        now += BOUND_TTL_SECONDS * 1000;
+
+        expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(401);
+    });
+
     it("refuses a request when the launch context expired before it could be bound", async () => {
         let now = 1_000_000;
         const expiringStore = new InMemoryLaunchContextStore(() => now);
@@ -233,18 +258,20 @@ describe("launch context owned by the gateway, over the app seam", () => {
 
         now += 60_000;
 
+        // 未綁定的 context 到期之後連綁都綁不上：authorize 擋掉它，IdP 完全不知道這次 launch。
         expect((await app.handle(gatewayAuthorize(authorizeParams(launchId)))).status).toBe(400);
-        // 過期的 launch context 不會留下任何綁定，因此這位醫師的任何 token 都拿不到病人。
+        expect(await expiringStore.bind(launchId, CLINICIAN_SUBJECT, APP_CLIENT_ID)).toBeUndefined();
+        // 因此這位醫師的任何 token 都拿不到病人。
         const token = await signAccessToken({ jti: "after-an-expired-launch", scope: "patient/Patient.read" });
         expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, token)).status).toBe(401);
     });
 
     it("refuses a request once the launch context is no longer in the store", async () => {
         const app = buildApp();
-        const { accessToken } = await launch(app, { patientId: AUTHORIZED_PATIENT }, APP_CLIENT_ID);
+        const { access_token: accessToken } = await launch(app, { patientId: AUTHORIZED_PATIENT });
         expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(200);
 
-        await store.delete("clinician-42", APP_CLIENT_ID);
+        await store.delete(CLINICIAN_SUBJECT, APP_CLIENT_ID);
 
         expect((await fhirGet(app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(401);
     });
@@ -265,7 +292,7 @@ describe("launch context owned by the gateway, over the app seam", () => {
 
     it("restricts a patient-list launch to the members of the list the EHR registered", async () => {
         const app = buildApp({ accessChecker: "list" });
-        const { accessToken } = await launch(app, { patientListId: PATIENT_LIST_ID }, APP_CLIENT_ID);
+        const { access_token: accessToken } = await launch(app, { patientListId: PATIENT_LIST_ID });
 
         // 這是 list 模式第一次真的能用：清單參照由 EHR 建立 context 時指定，
         // 不需要任何 IdP 發得出 `patient_list` claim。

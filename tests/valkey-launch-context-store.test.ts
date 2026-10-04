@@ -3,9 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { type App, createApp } from "../src/app";
 import type { GatewayConfig } from "../src/configs/env.schema";
-import { ENV_KEYS } from "../src/constants/config";
-import { FHIR_API_PREFIX } from "../src/constants/routes";
-import { INTERNAL_CREDENTIAL_HEADER } from "../src/controllers/internal-launch/internal-launch.controller";
+import { DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS, ENV_KEYS } from "../src/constants/config";
 import { StartupConnectionError } from "../src/errors/startup-connection.error";
 import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
 import { createLaunchContextStore } from "../src/services/launch-context-store-factory.service";
@@ -20,20 +18,20 @@ import { sleep } from "../src/utils/retry.util";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
 import {
     APP_CLIENT_ID,
-    APP_REDIRECT_URI,
     AUTHORIZED_PATIENT,
-    authenticateAtIdp,
     authorizeParams,
-    CODE_VERIFIER,
+    CLINICIAN_SUBJECT,
     createBaseConfig,
+    fhirGet,
     GATEWAY_IDP_CLIENT_ID,
     GATEWAY_IDP_CLIENT_SECRET,
     gatewayAuthorize,
     gatewayToken,
-    INTERNAL_CREDENTIAL,
-    locationOf,
+    launch,
     OTHER_APP_CLIENT_ID,
     OTHER_PATIENT,
+    PATIENT_LIST_ID,
+    registerLaunchContext,
     signAccessToken,
     startUpstreamServer,
     type UpstreamServer,
@@ -104,7 +102,7 @@ describe.skipIf(!valkeyAvailable)("launch context in a shared Valkey, over the a
             serveAuthorizationFlow: true,
             clientId: GATEWAY_IDP_CLIENT_ID,
             clientSecret: GATEWAY_IDP_CLIENT_SECRET,
-            subject: "clinician-42",
+            subject: CLINICIAN_SUBJECT,
         });
         upstream = await startUpstreamServer();
         tokenVerifier = await TokenVerifierService.create({
@@ -153,7 +151,11 @@ describe.skipIf(!valkeyAvailable)("launch context in a shared Valkey, over the a
         const config = configFor({ launchContextValkeyUrl: VALKEY_URL, ...overrides });
         const client = createValkeyClient(VALKEY_URL);
         await client.connect();
-        const store = new ValkeyLaunchContextStore(client);
+        const store = new ValkeyLaunchContextStore(
+            client,
+            () => Date.now(),
+            config.launchContextBoundTtlSeconds ?? DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS,
+        );
         return { app: buildAppWith(config, store), store };
     };
 
@@ -164,47 +166,6 @@ describe.skipIf(!valkeyAvailable)("launch context in a shared Valkey, over the a
         // 真實的連線中斷：Valkey 還在跑，但這個 store 的連線已經沒了。
         client.destroy();
         return buildAppWith(configFor(overrides), new ValkeyLaunchContextStore(client));
-    };
-
-    const registerLaunchContext = async (app: App, body: Record<string, string>): Promise<string> => {
-        const response = await app.handle(
-            new Request("http://localhost/internal/launch-contexts", {
-                method: "POST",
-                headers: { "content-type": "application/json", [INTERNAL_CREDENTIAL_HEADER]: INTERNAL_CREDENTIAL },
-                body: JSON.stringify(body),
-            }),
-        );
-        expect(response.status).toBe(201);
-        const created = (await response.json()) as { launchId: string };
-        return created.launchId;
-    };
-
-    type IssuedTokens = { access_token: string; refresh_token: string };
-
-    /** 跑完整條瀏覽器路徑並換出 token；綁定因此由 gateway 自己寫進 store。 */
-    const launch = async (
-        app: App,
-        body: Record<string, string>,
-        clientId: string = APP_CLIENT_ID,
-    ): Promise<IssuedTokens> => {
-        const launchId = await registerLaunchContext(app, body);
-        const idpRedirect = await locationOf(
-            await app.handle(gatewayAuthorize(authorizeParams(launchId, { client_id: clientId }))),
-        );
-        const gatewayCallback = await authenticateAtIdp(idpRedirect);
-        const appRedirect = await locationOf(await app.handle(new Request(gatewayCallback, { redirect: "manual" })));
-
-        const tokenResponse = await app.handle(
-            gatewayToken({
-                grant_type: "authorization_code",
-                code: appRedirect.searchParams.get("code") ?? "",
-                redirect_uri: APP_REDIRECT_URI,
-                client_id: clientId,
-                code_verifier: CODE_VERIFIER,
-            }),
-        );
-        expect(tokenResponse.status).toBe(200);
-        return (await tokenResponse.json()) as IssuedTokens;
     };
 
     const refresh = async (app: App, refreshToken: string, clientId: string = APP_CLIENT_ID): Promise<string> => {
@@ -222,13 +183,6 @@ describe.skipIf(!valkeyAvailable)("launch context in a shared Valkey, over the a
             jti: "token-with-no-binding",
             scope: PATIENT_READ_SCOPE,
         });
-
-    const fhirGet = (app: App, path: string, accessToken: string): Promise<Response> =>
-        app.handle(
-            new Request(`https://gateway.example${FHIR_API_PREFIX}${path}`, {
-                headers: { Authorization: `Bearer ${accessToken}` },
-            }),
-        );
 
     it("authorizes to the same patient after the gateway restarts", async () => {
         const before = await buildInstance();
@@ -273,6 +227,41 @@ describe.skipIf(!valkeyAvailable)("launch context in a shared Valkey, over the a
         expect((await fhirGet(after.app, `/Patient/${OTHER_PATIENT}`, refreshed)).status).toBe(403);
     });
 
+    it("lets one clinician re-launch the same app, and leaves the first token on its own patient", async () => {
+        const instance = await buildInstance();
+        const first = await launch(instance.app, { patientId: AUTHORIZED_PATIENT }, APP_CLIENT_ID);
+
+        const second = await launch(instance.app, { patientId: OTHER_PATIENT }, APP_CLIENT_ID);
+
+        expect((await fhirGet(instance.app, `/Patient/${OTHER_PATIENT}`, second.access_token)).status).toBe(200);
+        // Valkey 的 BIND_SCRIPT 覆寫 `(subject, client id)` 索引，但綁定記錄本身以 launch id
+        // 存放且不改寫，因此第一張 token 依然解析到它被發放時的那位病人。
+        expect((await fhirGet(instance.app, `/Patient/${AUTHORIZED_PATIENT}`, first.access_token)).status).toBe(200);
+        expect((await fhirGet(instance.app, `/Patient/${OTHER_PATIENT}`, first.access_token)).status).toBe(403);
+    });
+
+    it("refuses a request once the bound launch context has expired in Valkey", async () => {
+        // 這裡等的是 Valkey 自己的 TTL：替身時鐘不會讓真實的 store 到期。
+        const instance = await buildInstance({ launchContextBoundTtlSeconds: 1 });
+        const { access_token: accessToken } = await launch(instance.app, { patientId: AUTHORIZED_PATIENT });
+        expect((await fhirGet(instance.app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(200);
+
+        await sleep(1500);
+
+        // 綁定記錄由 Valkey 的 EXPIRE 收掉，因此這張 token 查不到病人：401。
+        expect((await fhirGet(instance.app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(401);
+    });
+
+    it("refuses a list-mode request once the bound launch context has expired in Valkey", async () => {
+        const instance = await buildInstance({ accessChecker: "list", launchContextBoundTtlSeconds: 1 });
+        const { access_token: accessToken } = await launch(instance.app, { patientListId: PATIENT_LIST_ID });
+        expect((await fhirGet(instance.app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(200);
+
+        await sleep(1500);
+
+        expect((await fhirGet(instance.app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(401);
+    });
+
     it("refuses a patient-mode request while the shared Valkey is unreachable", async () => {
         const app = await buildInstanceWithBrokenValkey();
 
@@ -296,11 +285,11 @@ describe.skipIf(!valkeyAvailable)("launch context in a shared Valkey, over the a
         const { access_token: accessToken } = await launch(instance.app, { patientId: AUTHORIZED_PATIENT });
         expect((await fhirGet(instance.app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(200);
 
-        expect(await instance.store.delete("clinician-42", APP_CLIENT_ID)).toBe(true);
+        expect(await instance.store.delete(CLINICIAN_SUBJECT, APP_CLIENT_ID)).toBe(true);
 
         // 綁定消失時，一併指向它的 access token 也必須查不到，而不是繼續授權到最後。
         expect((await fhirGet(instance.app, `/Patient/${AUTHORIZED_PATIENT}`, accessToken)).status).toBe(401);
-        expect(await instance.store.delete("clinician-42", APP_CLIENT_ID)).toBe(false);
+        expect(await instance.store.delete(CLINICIAN_SUBJECT, APP_CLIENT_ID)).toBe(false);
     });
 
     it("leaves nothing bindable in Valkey once the unbound launch context expires", async () => {

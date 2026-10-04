@@ -66,7 +66,7 @@ describe("DefaultLaunchContextProvider launch context source", () => {
         const store = new InMemoryLaunchContextStore();
         const created = await store.create({ patientId, ttlSeconds: 300 });
         await store.bind(created.launchId, "user-123", "app-1");
-        await store.attachAccessToken("jwt-id-1", "user-123", "app-1");
+        await store.attachAccessToken("jwt-id-1", created.launchId);
         return store;
     };
 
@@ -82,7 +82,7 @@ describe("DefaultLaunchContextProvider launch context source", () => {
         const store = new InMemoryLaunchContextStore();
         const created = await store.create({ patientListId: "list-1", ttlSeconds: 300 });
         await store.bind(created.launchId, "user-123", "app-1");
-        await store.attachAccessToken("jwt-id-1", "user-123", "app-1");
+        await store.attachAccessToken("jwt-id-1", created.launchId);
         const provider = new DefaultLaunchContextProvider(store);
 
         const launch = await provider.create(verifiedToken({ sub: "user-123", jti: "jwt-id-1" }));

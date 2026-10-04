@@ -1,11 +1,15 @@
+/// <reference types="fhir" />
+
 import { createHash } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { type CryptoKey, SignJWT } from "jose";
 import { fetch as undiciFetch } from "undici";
 import { expect } from "vitest";
 
+import type { App } from "../../src/app";
 import type { GatewayConfig } from "../../src/configs/env.schema";
-import { SMART_API_PREFIX, SMART_AUTHORIZE_PATH, SMART_TOKEN_PATH } from "../../src/constants/routes";
+import { FHIR_API_PREFIX, SMART_API_PREFIX, SMART_AUTHORIZE_PATH, SMART_TOKEN_PATH } from "../../src/constants/routes";
+import { INTERNAL_CREDENTIAL_HEADER } from "../../src/controllers/internal-launch/internal-launch.controller";
 
 /**
  * 走完整條 SMART launch 路徑的 app-over-HTTP 測試共用的固定參數與 stub。
@@ -29,16 +33,25 @@ export const AUTHORIZED_PATIENT = "456";
 export const OTHER_PATIENT = "789";
 export const PATIENT_LIST_ID = "patient-list-1";
 export const PATIENT_LIST_MEMBERS = [`Patient/${AUTHORIZED_PATIENT}`];
+/** stub IdP 簽出的 `sub`；測試裡引用它的地方都用這個值，不散落字串量。 */
+export const CLINICIAN_SUBJECT = "clinician-42";
+
+/** App 送出的 scope；`authorize` 轉發給 IdP 時必須原樣保留，測試因此斷言它逐字相同。 */
+export const APP_AUTHORIZE_SCOPE = "launch/patient patient/Patient.read patient/Observation.read openid fhirUser";
 
 export type UpstreamServer = {
     baseUrl: string;
     /** upstream 收到的 `patient` 搜尋參數；patient mode 會由 gateway 注入。 */
     patientSearchParams: string[];
+    /** 送到稽核後端的 AuditEvent，依送出順序；launch lifecycle 的事件也在裡面。 */
+    auditEvents: () => fhir4.AuditEvent[];
     close: () => Promise<void>;
 };
 
 /** stub FHIR upstream：Patient 讀取、Observation search 與 patient list 的 allow-list。 */
-export async function startUpstreamServer(): Promise<UpstreamServer> {
+export async function startUpstreamServer(options: { auditPostStatus?: number } = {}): Promise<UpstreamServer> {
+    const auditPostStatus = options.auditPostStatus ?? 201;
+    const auditEvents: fhir4.AuditEvent[] = [];
     const patientSearchParams: string[] = [];
     const server: Server = createServer((req, res) => {
         const url = new URL(req.url ?? "/", "http://127.0.0.1");
@@ -69,6 +82,20 @@ export async function startUpstreamServer(): Promise<UpstreamServer> {
             return;
         }
 
+        // 稽核後端：launch lifecycle 與 access 事件都走這裡，依送出順序收集。
+        if (req.method === "POST" && url.pathname === "/fhir/AuditEvent") {
+            let body = "";
+            req.on("data", (chunk: Buffer) => {
+                body += chunk.toString("utf8");
+            });
+            req.on("end", () => {
+                auditEvents.push(JSON.parse(body) as fhir4.AuditEvent);
+                res.writeHead(auditPostStatus, { "content-type": "application/fhir+json" });
+                res.end(JSON.stringify({ resourceType: "OperationOutcome" }));
+            });
+            return;
+        }
+
         res.writeHead(404, { "content-type": "application/fhir+json" });
         res.end(JSON.stringify({ resourceType: "OperationOutcome" }));
     });
@@ -83,6 +110,7 @@ export async function startUpstreamServer(): Promise<UpstreamServer> {
 
     return {
         patientSearchParams,
+        auditEvents: () => auditEvents,
         baseUrl: `http://127.0.0.1:${address.port}/fhir`,
         close: () =>
             new Promise<void>((resolve, reject) => {
@@ -118,7 +146,7 @@ export function authorizeParams(launch: string, overrides: Record<string, string
         response_type: "code",
         client_id: APP_CLIENT_ID,
         redirect_uri: APP_REDIRECT_URI,
-        scope: "launch/patient patient/Patient.read patient/Observation.read openid fhirUser",
+        scope: APP_AUTHORIZE_SCOPE,
         aud: "https://fhir.example",
         launch,
         nonce: "n-0S6_WzA2Mj",
@@ -167,6 +195,60 @@ export async function signAccessToken(
     return await new SignJWT(claims)
         .setProtectedHeader({ alg: "RS256" })
         .setIssuer(issuerUrl)
-        .setSubject("clinician-42")
+        .setSubject(CLINICIAN_SUBJECT)
         .sign(privateKey);
+}
+
+/** EHR 在 App 開啟前向內部端點註冊 launch context；回傳 gateway 生成的 launch id。 */
+export async function registerLaunchContext(app: App, body: Record<string, string>): Promise<string> {
+    const response = await app.handle(
+        new Request("http://localhost/internal/launch-contexts", {
+            method: "POST",
+            headers: { "content-type": "application/json", [INTERNAL_CREDENTIAL_HEADER]: INTERNAL_CREDENTIAL },
+            body: JSON.stringify(body),
+        }),
+    );
+    expect(response.status).toBe(201);
+    return ((await response.json()) as { launchId: string }).launchId;
+}
+
+/** 一次完整 SMART launch 的結果：gateway 自己發出的一次性 code 已換成 IdP 的 token。 */
+export type IssuedTokens = { access_token: string; refresh_token: string };
+
+/**
+ * 跑完整條瀏覽器路徑並換出 token：註冊 → authorize → IdP → callback → code exchange。
+ * 綁定因此是 gateway 自己寫進 store 的，測試不自己塞任何東西進去。
+ */
+export async function launch(
+    app: App,
+    body: Record<string, string>,
+    clientId: string = APP_CLIENT_ID,
+): Promise<IssuedTokens> {
+    const launchId = await registerLaunchContext(app, body);
+    const idpRedirect = await locationOf(
+        await app.handle(gatewayAuthorize(authorizeParams(launchId, { client_id: clientId }))),
+    );
+    const gatewayCallback = await authenticateAtIdp(idpRedirect);
+    const appRedirect = await locationOf(await app.handle(new Request(gatewayCallback, { redirect: "manual" })));
+
+    const tokenResponse = await app.handle(
+        gatewayToken({
+            grant_type: "authorization_code",
+            code: appRedirect.searchParams.get("code") ?? "",
+            redirect_uri: APP_REDIRECT_URI,
+            client_id: clientId,
+            code_verifier: CODE_VERIFIER,
+        }),
+    );
+    expect(tokenResponse.status).toBe(200);
+    return (await tokenResponse.json()) as IssuedTokens;
+}
+
+/** 帶著 access token 讀某位病人的資源；測試斷言的是 gateway 回的 status code。 */
+export function fhirGet(app: App, path: string, accessToken: string): Promise<Response> {
+    return app.handle(
+        new Request(`${GATEWAY_BASE_URL}${FHIR_API_PREFIX}${path}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+        }),
+    );
 }

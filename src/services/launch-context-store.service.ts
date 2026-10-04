@@ -1,5 +1,7 @@
 import { randomBytes } from "node:crypto";
 
+import { DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS } from "../constants/config";
+import { LAUNCH_ID_BYTES } from "../constants/launch-context";
 import type {
     BoundLaunchContext,
     CreatedLaunchContext,
@@ -7,16 +9,6 @@ import type {
     LaunchContextStore,
 } from "../types/launch-context-store";
 import { launchContextBindingKey } from "./launch-context-store-key";
-
-/** launch id 的位元組長度；base64url 後 43 個字元，不含任何可推導的結構。 */
-const LAUNCH_ID_BYTES = 32;
-
-type UnboundRecord = {
-    patientId?: string;
-    patientListId?: string;
-    encounterId?: string;
-    expiresAt: number;
-};
 
 /**
  * In-memory 的 launch context store：供測試與單機開發使用，讓測試不必依賴
@@ -31,27 +23,29 @@ type UnboundRecord = {
  */
 export class InMemoryLaunchContextStore implements LaunchContextStore {
     private readonly unbound = new Map<string, UnboundRecord>();
-    private readonly bound = new Map<string, BoundLaunchContext>();
-    /** access token 的 `jti` → 綁定鍵；FHIR 請求時靠它找回這次授權綁的是誰。 */
+    /** 綁定事實本身，以 launch id 存放：launch id 單次可用，因此它天然唯一且不會被改寫。 */
+    private readonly bound = new Map<string, BoundRecord>();
+    /** `(subject, client id)` → 這組鍵目前指向哪一次 launch。粗鍵，會被後來的 launch 移動。 */
+    private readonly bindingIndex = new Map<string, string>();
+    /** access token 的 `jti` → 它被發放時所屬的那一次 launch（launch id）。 */
     private readonly accessTokens = new Map<string, string>();
     private readonly now: () => number;
+    private readonly boundTtlSeconds: number;
 
     /**
      * @param now 可注入的時鐘來源，供測試驗證 TTL 邊界；正式環境走系統時間。
      *            Injectable clock so TTL boundaries can be exercised without waiting.
+     * @param boundTtlSeconds 綁定後的存活秒數（ADR-0004：一位醫師處理同一位病人的時長上限）。
      */
-    constructor(now: () => number = () => Date.now()) {
+    constructor(now: () => number = () => Date.now(), boundTtlSeconds = DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS) {
         this.now = now;
+        this.boundTtlSeconds = boundTtlSeconds;
     }
 
     async create(input: CreateLaunchContextInput): Promise<CreatedLaunchContext> {
         const now = this.now();
-        // 未綁定 context 過期就清掉，避免 map 隨 EHR 的註冊量無限成長。
-        for (const [launchId, record] of this.unbound) {
-            if (record.expiresAt <= now) {
-                this.unbound.delete(launchId);
-            }
-        }
+        // 過期的記錄順手清掉，避免 map 隨 EHR 的註冊量無限成長。
+        this.purgeExpired(now);
 
         const expiresAt = now + input.ttlSeconds * 1000;
         const launchId = randomBytes(LAUNCH_ID_BYTES).toString("base64url");
@@ -77,13 +71,7 @@ export class InMemoryLaunchContextStore implements LaunchContextStore {
             return undefined;
         }
 
-        const key = launchContextBindingKey(subject, clientId);
-        // 單次可用：launch id 已經綁給這組鍵時，既有綁定不動。
-        if (this.bound.has(key)) {
-            return undefined;
-        }
-
-        const bound: BoundLaunchContext = {
+        const context: BoundLaunchContext = {
             launchId,
             subject,
             clientId,
@@ -93,37 +81,89 @@ export class InMemoryLaunchContextStore implements LaunchContextStore {
             ...(record.encounterId !== undefined ? { encounterId: record.encounterId } : {}),
         };
         this.unbound.delete(launchId);
-        this.bound.set(key, bound);
+        this.bound.set(launchId, { context, expiresAt: this.now() + this.boundTtlSeconds * 1000 });
+        // 這組鍵「目前」指向這次 launch。一位醫師看完病人 A 再從病人 B 的頁面開同一個 App，
+        // 是 EHR 的日常而不是例外，因此重新綁定是允許的。已經發出去的 access token 不受影響：
+        // 它們各自記著自己那一次 launch 的 launch id，不是這組粗鍵。
+        this.bindingIndex.set(launchContextBindingKey(subject, clientId), launchId);
 
-        return bound;
+        return context;
     }
 
-    async attachAccessToken(tokenId: string, subject: string, clientId: string): Promise<void> {
-        const key = launchContextBindingKey(subject, clientId);
+    async attachAccessToken(tokenId: string, launchId: string): Promise<void> {
         // 沒有綁定就不接：沒有綁定的 access token 在授權層本來就會被拒絕。
-        if (this.bound.has(key)) {
-            this.accessTokens.set(tokenId, key);
+        if (this.bound.has(launchId)) {
+            this.accessTokens.set(tokenId, launchId);
         }
     }
 
     async getByAccessToken(tokenId: string): Promise<BoundLaunchContext | undefined> {
-        const key = this.accessTokens.get(tokenId);
-        return key === undefined ? undefined : this.bound.get(key);
+        const launchId = this.accessTokens.get(tokenId);
+        return launchId === undefined ? undefined : this.readBinding(launchId);
     }
 
     async get(subject: string, clientId: string): Promise<BoundLaunchContext | undefined> {
-        return this.bound.get(launchContextBindingKey(subject, clientId));
+        const launchId = this.bindingIndex.get(launchContextBindingKey(subject, clientId));
+        return launchId === undefined ? undefined : this.readBinding(launchId);
     }
 
     async delete(subject: string, clientId: string): Promise<boolean> {
         const key = launchContextBindingKey(subject, clientId);
-        const deleted = this.bound.delete(key);
+        const launchId = this.bindingIndex.get(key);
+        this.bindingIndex.delete(key);
+        if (launchId === undefined) {
+            return false;
+        }
+
+        const deleted = this.bound.delete(launchId);
         // 綁定消失時，已接上去的 access token 必須跟著失效：索引指向不存在的綁定等於查無。
-        for (const [tokenId, boundKey] of this.accessTokens) {
-            if (boundKey === key) {
+        for (const [tokenId, boundLaunchId] of this.accessTokens) {
+            if (boundLaunchId === launchId) {
                 this.accessTokens.delete(tokenId);
             }
         }
         return deleted;
     }
+
+    private readBinding(launchId: string): BoundLaunchContext | undefined {
+        const record = this.bound.get(launchId);
+        if (record === undefined) {
+            return undefined;
+        }
+        if (record.expiresAt <= this.now()) {
+            this.bound.delete(launchId);
+            return undefined;
+        }
+        return record.context;
+    }
+
+    private purgeExpired(now: number): void {
+        for (const [launchId, record] of this.unbound) {
+            if (record.expiresAt <= now) {
+                this.unbound.delete(launchId);
+            }
+        }
+        for (const [launchId, record] of this.bound) {
+            if (record.expiresAt <= now) {
+                this.bound.delete(launchId);
+                for (const [tokenId, boundLaunchId] of this.accessTokens) {
+                    if (boundLaunchId === launchId) {
+                        this.accessTokens.delete(tokenId);
+                    }
+                }
+            }
+        }
+    }
 }
+
+type UnboundRecord = {
+    patientId?: string;
+    patientListId?: string;
+    encounterId?: string;
+    expiresAt: number;
+};
+
+type BoundRecord = {
+    context: BoundLaunchContext;
+    expiresAt: number;
+};

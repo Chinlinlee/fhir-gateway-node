@@ -1,8 +1,4 @@
-import { createHash } from "node:crypto";
-import { createServer, type Server } from "node:http";
-
-import { decodeJwt } from "jose";
-import { fetch as undiciFetch } from "undici";
+import { type CryptoKey, decodeJwt } from "jose";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { type App, createApp } from "../src/app";
@@ -14,137 +10,51 @@ import {
     SMART_TOKEN_PATH,
     WELL_KNOWN_SMART_CONFIGURATION_PATH,
 } from "../src/constants/routes";
-import { INTERNAL_CREDENTIAL_HEADER } from "../src/controllers/internal-launch/internal-launch.controller";
 import { AllowedQueriesCheckerService } from "../src/services/allowed-queries.service";
 import { InMemoryLaunchContextStore } from "../src/services/launch-context-store.service";
 import { PatientFinderService } from "../src/services/patient-finder.service";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import { allowedQueriesFixturePath } from "./helpers/allowed-queries-fixture";
 import { type IssuerTestServer, startIssuerTestServer } from "./helpers/issuer-test-server";
+import {
+    APP_AUTHORIZE_SCOPE,
+    APP_CLIENT_ID,
+    APP_REDIRECT_URI,
+    APP_STATE,
+    AUTHORIZED_PATIENT,
+    authenticateAtIdp,
+    authorizeParams,
+    CLINICIAN_SUBJECT,
+    CODE_VERIFIER,
+    createBaseConfig,
+    GATEWAY_BASE_URL,
+    GATEWAY_IDP_CLIENT_ID,
+    GATEWAY_IDP_CLIENT_SECRET,
+    gatewayAuthorize,
+    gatewayToken,
+    INTERNAL_CREDENTIAL,
+    locationOf,
+    OTHER_PATIENT,
+    signAccessToken,
+    startUpstreamServer,
+    type UpstreamServer,
+} from "./helpers/launch-flow-fixture";
 
 /**
  * 一份未修改的標準 SMART App：它只知道 SMART 的兩個端點與 PKCE，除此之外對 gateway
  * 沒有任何特別設定。`GATEWAY_BASE_URL` 是 operator 設定的 gateway public base URL。
+ *
+ * 請求形狀與 stub 全部來自 `helpers/launch-flow-fixture`——同一條 launch 路徑的另外幾組測試
+ * 也用它，兩邊的差異才會只剩下這一份檔案要驗的東西。
  */
-const GATEWAY_BASE_URL = "https://gateway.example";
-const APP_CLIENT_ID = "smart-app-client";
-const APP_REDIRECT_URI = "https://app.example/callback";
-const APP_STATE = "app-state-0S6_WzA2Mj";
-const GATEWAY_IDP_CLIENT_ID = "gateway-idp-client";
-const GATEWAY_IDP_CLIENT_SECRET = "gateway-idp-client-secret";
-const INTERNAL_CREDENTIAL = "ehr-internal-credential";
-const CODE_VERIFIER = "sBQnbpC_DdE9KZ1TLJKqzKvHqGHvVv0nQrTvVWkGWU8a";
-const CODE_CHALLENGE = createHash("sha256").update(CODE_VERIFIER).digest("base64url");
 
-type UpstreamServer = {
-    baseUrl: string;
-    close: () => Promise<void>;
-};
-
+/** App 的 redirect_uri 上帶回來的 `code`：gateway 自己發的一次性不透明 handle。 */
 type Launch = {
-    /** App 的 redirect_uri 上帶回來的 `code`：gateway 自己發的一次性不透明 handle */
     gatewayCode: string;
     state: string | null;
     origin: string;
     path: string;
 };
-
-async function startUpstreamServer(): Promise<UpstreamServer> {
-    const server: Server = createServer((req, res) => {
-        const path = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
-
-        if (req.method === "GET" && path === "/fhir/Patient/456") {
-            res.writeHead(200, { "content-type": "application/fhir+json" });
-            res.end(JSON.stringify({ resourceType: "Patient", id: "456" }));
-            return;
-        }
-
-        res.writeHead(404, { "content-type": "application/fhir+json" });
-        res.end(JSON.stringify({ resourceType: "OperationOutcome" }));
-    });
-
-    await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", () => resolve());
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-        throw new Error("Unable to bind upstream test server");
-    }
-
-    return {
-        baseUrl: `http://127.0.0.1:${address.port}/fhir`,
-        close: () =>
-            new Promise<void>((resolve, reject) => {
-                server.close((error) => (error ? reject(error) : resolve()));
-            }),
-    };
-}
-
-function createBaseConfig(overrides: Partial<GatewayConfig>): GatewayConfig {
-    return {
-        proxyTo: "http://127.0.0.1:0/fhir",
-        tokenIssuer: "http://token-issuer",
-        backendType: "HAPI",
-        accessChecker: "basic",
-        auditEventActions: [],
-        wellKnownEndpoint: "test",
-        runMode: "PROD",
-        allowTokenIssuerHostMismatch: false,
-        port: 3000,
-        gatewayPublicBaseUrl: GATEWAY_BASE_URL,
-        gatewayClientId: GATEWAY_IDP_CLIENT_ID,
-        gatewayClientSecret: GATEWAY_IDP_CLIENT_SECRET,
-        internalLaunchApiEnabled: true,
-        internalLaunchApiCredential: INTERNAL_CREDENTIAL,
-        launchContextTtlSeconds: 600,
-        ...overrides,
-    };
-}
-
-/** App 的 `authorize` 請求參數；`launch` 由 EHR 建立 context 後取得。 */
-function authorizeParams(launch: string, overrides: Record<string, string> = {}): URLSearchParams {
-    return new URLSearchParams({
-        response_type: "code",
-        client_id: APP_CLIENT_ID,
-        redirect_uri: APP_REDIRECT_URI,
-        scope: "launch/patient patient/Patient.read openid fhirUser",
-        aud: "https://fhir.example",
-        launch,
-        nonce: "n-0S6_WzA2Mj",
-        state: APP_STATE,
-        code_challenge: CODE_CHALLENGE,
-        code_challenge_method: "S256",
-        ...overrides,
-    });
-}
-
-function gatewayAuthorize(params: URLSearchParams): Request {
-    return new Request(`${GATEWAY_BASE_URL}${SMART_API_PREFIX}${SMART_AUTHORIZE_PATH}?${params.toString()}`, {
-        redirect: "manual",
-    });
-}
-
-function gatewayToken(form: Record<string, string>): Request {
-    return new Request(`${GATEWAY_BASE_URL}${SMART_API_PREFIX}${SMART_TOKEN_PATH}`, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams(form).toString(),
-    });
-}
-
-/** 扮演使用者的瀏覽器：gateway 的 302 指向哪裡，這裡就走到哪裡。 */
-async function locationOf(response: Response): Promise<URL> {
-    expect(response.status).toBe(302);
-    const location = response.headers.get("location");
-    expect(location).not.toBeNull();
-    return new URL(location ?? "");
-}
-
-/** 在 IdP 完成認證：IdP 302 回 gateway 自己的 callback。 */
-async function authenticateAtIdp(idpRedirect: URL): Promise<URL> {
-    const response = await undiciFetch(idpRedirect, { redirect: "manual" });
-    return locationOf(response);
-}
 
 describe("SMART authorization flow proxied by the gateway", () => {
     let issuer: IssuerTestServer;
@@ -157,7 +67,7 @@ describe("SMART authorization flow proxied by the gateway", () => {
             serveAuthorizationFlow: true,
             clientId: GATEWAY_IDP_CLIENT_ID,
             clientSecret: GATEWAY_IDP_CLIENT_SECRET,
-            subject: "clinician-42",
+            subject: CLINICIAN_SUBJECT,
         });
         upstream = await startUpstreamServer();
         tokenVerifier = await TokenVerifierService.create({
@@ -179,6 +89,7 @@ describe("SMART authorization flow proxied by the gateway", () => {
             tokenIssuer: issuer.issuerUrl,
             proxyTo: upstream.baseUrl,
             allowedQueriesFile: allowedQueriesFixturePath("allowed_unauthenticated_queries.json"),
+            accessChecker: "basic",
             ...overrides,
         });
         return createApp({
@@ -193,10 +104,10 @@ describe("SMART authorization flow proxied by the gateway", () => {
     /** EHR 在 App 開啟前建立 launch context，拿到 gateway 生成的 launch id。 */
     const registerLaunchContext = async (app: App): Promise<string> => {
         const response = await app.handle(
-            new Request(`http://localhost/internal/launch-contexts`, {
+            new Request("http://localhost/internal/launch-contexts", {
                 method: "POST",
-                headers: { "content-type": "application/json", [INTERNAL_CREDENTIAL_HEADER]: INTERNAL_CREDENTIAL },
-                body: JSON.stringify({ patientId: "456" }),
+                headers: { "content-type": "application/json", "x-internal-credential": INTERNAL_CREDENTIAL },
+                body: JSON.stringify({ patientId: AUTHORIZED_PATIENT }),
             }),
         );
         expect(response.status).toBe(201);
@@ -230,11 +141,18 @@ describe("SMART authorization flow proxied by the gateway", () => {
             }),
         );
 
+    /** 自己簽一張 IdP access token；它的 `jti` 從未經過 token endpoint，因此沒有任何綁定。 */
+    const signUnboundToken = async (): Promise<string> =>
+        await signAccessToken(issuer.issuerUrl, issuer.keys.privateKey as CryptoKey, {
+            jti: "state-mismatch-never-attached",
+            scope: "patient/Patient.read",
+        });
+
     it("completes a full SMART launch and serves FHIR with the token it obtained", async () => {
         const app = buildApp();
-        const launch = await registerLaunchContext(app);
+        const launchId = await registerLaunchContext(app);
 
-        const completed = await runLaunch(app, authorizeParams(launch));
+        const completed = await runLaunch(app, authorizeParams(launchId));
 
         expect(completed.origin + completed.path).toBe(APP_REDIRECT_URI);
         expect(completed.state).toBe(APP_STATE);
@@ -253,7 +171,7 @@ describe("SMART authorization flow proxied by the gateway", () => {
         expect(decodeJwt(tokens.access_token).iss).toBe(issuer.issuerUrl);
 
         const fhirResponse = await app.handle(
-            new Request(`${GATEWAY_BASE_URL}${FHIR_API_PREFIX}/Patient/456`, {
+            new Request(`${GATEWAY_BASE_URL}${FHIR_API_PREFIX}/Patient/${AUTHORIZED_PATIENT}`, {
                 headers: { Authorization: `Bearer ${tokens.access_token}` },
             }),
         );
@@ -266,27 +184,42 @@ describe("SMART authorization flow proxied by the gateway", () => {
         expect(issuer.observations.token?.["code_verifier"]).not.toBe(CODE_VERIFIER);
     });
 
-    it("binds the launch to the subject and client at the callback, so the store can serve it back", async () => {
-        const app = buildApp();
-        const launch = await registerLaunchContext(app);
+    it("serves FHIR to the patient the callback bound, so the store can serve it back", async () => {
+        // patient 模式：basic 模式不檢查 launch context，用它驗不出綁定有沒有生效。
+        const app = buildApp({ accessChecker: "patient" });
+        const launchId = await registerLaunchContext(app);
 
-        await runLaunch(app, authorizeParams(launch));
+        const completed = await runLaunch(app, authorizeParams(launchId));
+        const tokenResponse = await exchangeCode(app, completed);
+        expect(tokenResponse.status).toBe(200);
+        const tokens = (await tokenResponse.json()) as { access_token: string };
 
-        const bound = await store.get("clinician-42", APP_CLIENT_ID);
-        expect(bound?.launchId).toBe(launch);
-        expect(bound?.patientId).toBe("456");
+        // 可觀察的結果就是這兩行：這張 token 被授權到 callback 綁定的那位病人，只有那位。
+        const allowed = await app.handle(
+            new Request(`${GATEWAY_BASE_URL}${FHIR_API_PREFIX}/Patient/${AUTHORIZED_PATIENT}`, {
+                headers: { Authorization: `Bearer ${tokens.access_token}` },
+            }),
+        );
+        const denied = await app.handle(
+            new Request(`${GATEWAY_BASE_URL}${FHIR_API_PREFIX}/Patient/${OTHER_PATIENT}`, {
+                headers: { Authorization: `Bearer ${tokens.access_token}` },
+            }),
+        );
+
+        expect(allowed.status).toBe(200);
+        expect(denied.status).toBe(403);
     });
 
     it("hands out an opaque code that carries no identity and no patient reference", async () => {
         const app = buildApp();
-        const launch = await registerLaunchContext(app);
+        const launchId = await registerLaunchContext(app);
 
-        const completed = await runLaunch(app, authorizeParams(launch));
+        const completed = await runLaunch(app, authorizeParams(launchId));
 
         // 不透明 handle：不是 JWT，解不出 payload，也沒有任何身分或病人資訊
         expect(completed.gatewayCode.split(".")).toHaveLength(1);
-        expect(completed.gatewayCode).not.toContain("clinician-42");
-        expect(completed.gatewayCode).not.toContain("456");
+        expect(completed.gatewayCode).not.toContain(CLINICIAN_SUBJECT);
+        expect(completed.gatewayCode).not.toContain(AUTHORIZED_PATIENT);
         expect(() => decodeJwt(completed.gatewayCode)).toThrow();
     });
 
@@ -309,17 +242,17 @@ describe("SMART authorization flow proxied by the gateway", () => {
 
     it("forwards launch, state, scope, aud and nonce to the IdP with its own callback as redirect_uri", async () => {
         const app = buildApp();
-        const launch = await registerLaunchContext(app);
+        const launchId = await registerLaunchContext(app);
 
-        const idpRedirect = await locationOf(await app.handle(gatewayAuthorize(authorizeParams(launch))));
+        const idpRedirect = await locationOf(await app.handle(gatewayAuthorize(authorizeParams(launchId))));
         expect(idpRedirect.origin).toBe(issuer.issuerUrl);
         // 真的打到 IdP：那裡看到的參數就是 gateway 轉發出去的內容
         await authenticateAtIdp(idpRedirect);
 
         const forwarded = issuer.observations.authorize;
-        expect(forwarded?.["launch"]).toBe(launch);
+        expect(forwarded?.["launch"]).toBe(launchId);
         expect(forwarded?.["state"]).toBe(APP_STATE);
-        expect(forwarded?.["scope"]).toBe("launch/patient patient/Patient.read openid fhirUser");
+        expect(forwarded?.["scope"]).toBe(APP_AUTHORIZE_SCOPE);
         expect(forwarded?.["aud"]).toBe("https://fhir.example");
         expect(forwarded?.["nonce"]).toBe("n-0S6_WzA2Mj");
         expect(forwarded?.["client_id"]).toBe(GATEWAY_IDP_CLIENT_ID);
@@ -327,7 +260,7 @@ describe("SMART authorization flow proxied by the gateway", () => {
         expect(forwarded?.["redirect_uri"]).toContain(`${GATEWAY_BASE_URL}${SMART_API_PREFIX}/callback`);
         expect(forwarded?.["redirect_uri"]).not.toBe(APP_REDIRECT_URI);
         // App 的 PKCE 由 gateway 自己驗證，因此這裡是 gateway 對 IdP 那一腿自建的 challenge
-        expect(forwarded?.["code_challenge"]).not.toBe(CODE_CHALLENGE);
+        expect(forwarded?.["code_challenge"]).not.toBe(CODE_VERIFIER);
         expect(forwarded?.["code_challenge_method"]).toBe("S256");
     });
 
@@ -342,20 +275,20 @@ describe("SMART authorization flow proxied by the gateway", () => {
 
     it("rejects a launch id that was already used for a binding", async () => {
         const app = buildApp();
-        const launch = await registerLaunchContext(app);
-        await runLaunch(app, authorizeParams(launch));
+        const launchId = await registerLaunchContext(app);
+        await runLaunch(app, authorizeParams(launchId));
 
-        const replayed = await app.handle(gatewayAuthorize(authorizeParams(launch)));
+        const replayed = await app.handle(gatewayAuthorize(authorizeParams(launchId)));
 
         expect(replayed.status).toBe(400);
         expect(issuer.requests.authorize).toBe(1);
     });
 
     it("refuses to bind when the state at callback does not match the one recorded at authorize", async () => {
-        const app = buildApp();
-        const launch = await registerLaunchContext(app);
+        const app = buildApp({ accessChecker: "patient" });
+        const launchId = await registerLaunchContext(app);
 
-        const idpRedirect = await locationOf(await app.handle(gatewayAuthorize(authorizeParams(launch))));
+        const idpRedirect = await locationOf(await app.handle(gatewayAuthorize(authorizeParams(launchId))));
         const gatewayCallback = await authenticateAtIdp(idpRedirect);
         const tampered = new URL(gatewayCallback);
         tampered.searchParams.set("state", "attacker-state");
@@ -363,13 +296,21 @@ describe("SMART authorization flow proxied by the gateway", () => {
         const response = await app.handle(new Request(tampered, { redirect: "manual" }));
 
         expect(response.status).toBe(400);
-        expect(await store.get("clinician-42", APP_CLIENT_ID)).toBeUndefined();
+        // state 不符就不綁定，因此這位醫師的下一張 token 仍然拿不到病人。
+        const noBinding = await app.handle(
+            new Request(`${GATEWAY_BASE_URL}${FHIR_API_PREFIX}/Patient/${AUTHORIZED_PATIENT}`, {
+                headers: {
+                    Authorization: `Bearer ${await signUnboundToken()}`,
+                },
+            }),
+        );
+        expect(noBinding.status).toBe(401);
     });
 
     it("rejects a gateway code that is exchanged twice", async () => {
         const app = buildApp();
-        const launch = await registerLaunchContext(app);
-        const completed = await runLaunch(app, authorizeParams(launch));
+        const launchId = await registerLaunchContext(app);
+        const completed = await runLaunch(app, authorizeParams(launchId));
 
         expect((await exchangeCode(app, completed)).status).toBe(200);
         const replay = await exchangeCode(app, completed);
@@ -379,8 +320,8 @@ describe("SMART authorization flow proxied by the gateway", () => {
 
     it("rejects the code exchange when code_verifier is missing or does not match", async () => {
         const app = buildApp();
-        const launch = await registerLaunchContext(app);
-        const completed = await runLaunch(app, authorizeParams(launch));
+        const launchId = await registerLaunchContext(app);
+        const completed = await runLaunch(app, authorizeParams(launchId));
 
         const withoutVerifier = await exchangeCode(app, completed, { code_verifier: "" });
         const wrongVerifier = await exchangeCode(app, completed, { code_verifier: `${CODE_VERIFIER}-wrong` });
@@ -391,10 +332,10 @@ describe("SMART authorization flow proxied by the gateway", () => {
 
     it("rejects an authorize request that asks for a code challenge method other than S256", async () => {
         const app = buildApp();
-        const launch = await registerLaunchContext(app);
+        const launchId = await registerLaunchContext(app);
 
         const response = await app.handle(
-            gatewayAuthorize(authorizeParams(launch, { code_challenge_method: "plain" })),
+            gatewayAuthorize(authorizeParams(launchId, { code_challenge_method: "plain" })),
         );
 
         expect(response.status).toBe(400);
@@ -403,8 +344,8 @@ describe("SMART authorization flow proxied by the gateway", () => {
 
     it("exchanges a refresh token at the same token endpoint and returns new IdP tokens", async () => {
         const app = buildApp();
-        const launch = await registerLaunchContext(app);
-        const completed = await runLaunch(app, authorizeParams(launch));
+        const launchId = await registerLaunchContext(app);
+        const completed = await runLaunch(app, authorizeParams(launchId));
         const tokenResponse = await exchangeCode(app, completed);
         const first = (await tokenResponse.json()) as { access_token: string; refresh_token: string };
 

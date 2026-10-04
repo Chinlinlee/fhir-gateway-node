@@ -34,6 +34,11 @@ export type IssuedAuthorization = {
     accessTokenId?: string;
     /** 綁定發生時 IdP 簽發的 `sub`；token endpoint 換發時靠它接回同一筆綁定。 */
     subject: string;
+    /**
+     * 這次授權綁定的 launch id。refresh 換發新 access token 時靠它接回**同一筆**綁定——
+     * 不是靠 `(subject, client id)`，那組粗鍵會被這位醫師後來的 launch 移動。
+     */
+    launchId: string;
     /** IdP 簽發的 refresh token；refresh grant 以它為索引鍵。IdP 不發時沒有這個授權。 */
     refreshToken?: string;
     tokenType: string;

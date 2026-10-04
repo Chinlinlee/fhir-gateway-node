@@ -240,7 +240,7 @@ Access checker **不得**直接讀 raw JWT claims；claim 名稱只存在於 `La
 
 `patientId`／`patientListId` 為 `undefined` 有兩種同義的原因：gateway 的 store 裡沒有這次授權的
 context，或 store 不可達。**兩者都不會退回讀 token**——需要 launch context 的 checker 會因此拒絕
-（401）。`getLaunchIdOrFail` 拋 `AuthenticationError` 時訊息會命名缺少的邏輯欄位。
+（401）。`getPatientReferenceOrFail` 拋 `AuthenticationError` 時訊息會命名缺少的邏輯欄位。
 
 Launch context 欄位缺少或格式錯誤時拋 `AuthenticationError`（回 401），訊息會命名缺少的邏輯欄位；請求格式錯誤拋 `InvalidRequestError`（回 400）。
 
@@ -327,7 +327,8 @@ cp env.example .env
 - `AUDIT_EVENT_ACTIONS_CONFIG`：AuditEvent action code 字串（例如 `CRUDE`）。**留空 = 完全不稽核**（含 launch lifecycle 事件）。見 [Launch AuditEvent](#launch-auditevent)
 - `INTERNAL_LAUNCH_API_ENABLED`：`true` 時啟用 EHR 面向的內部 launch context 端點（預設 `false`）。**`ACCESS_CHECKER=patient` 或 `list` 時這是必要條件**——launch context 由 gateway 自己持有，EHR 不註冊就沒有病人參照。見 [內部 Launch Context 端點](#內部-launch-context-端點)
 - `INTERNAL_LAUNCH_API_CREDENTIAL`：內部端點的認證憑證。`INTERNAL_LAUNCH_API_ENABLED=true` 而未設定時，gateway **啟動即失敗**並指名這個變數
-- `LAUNCH_CONTEXT_TTL_SECONDS`：未綁定 launch context 的存活秒數（預設 `600`）。只管**綁定前**那一段；綁定後的生命週期目前由 gateway 自管，尚無 TTL（見 ADR-0004）
+- `LAUNCH_CONTEXT_TTL_SECONDS`：**未綁定** launch context 的存活秒數（預設 `600`）。只管綁定前那一段——EHR 註冊之後、使用者還沒在 IdP 按下同意的那個視窗
+- `LAUNCH_CONTEXT_BOUND_TTL_SECONDS`：**已綁定** launch context 的存活秒數（預設 `14400`，即 4 小時）。到期之後 patient／list 模式的請求以 401 拒絕。預設值取自 ADR-0004 的理由：臨床實務上醫師處理同一位病人可能需要 4 小時。**這同時是撤銷最壞要等多久的上限**——目前沒有 IdP session 存活檢查可以續期（ADR-0004 的另一半尚未實作），因此到期就是真的到期。見 [Launch Context 的生命週期](#launch-context-的生命週期)
 - `LAUNCH_CONTEXT_STORE`：`memory`（預設，測試／單機開發）或 `valkey`（正式環境的預期選擇）。`RUN_MODE=PROD` 搭配 `memory` 時 gateway 啟動會明確警告它不適合正式環境。見 [Launch Context Store（Valkey）](#launch-context-storevalkey)
 - `LAUNCH_CONTEXT_VALKEY_URL`：Valkey 連線 URL（`rediss://<user>:<password>@<host>:6379`）。`LAUNCH_CONTEXT_STORE=valkey` 而未設定時，gateway **啟動即失敗**並指名這個變數。見 [Launch Context Store（Valkey）](#launch-context-storevalkey)
 - `GATEWAY_PUBLIC_BASE_URL`：gateway 對外可被 SMART App 呼叫的 base URL。設定它等同啟用代理的 SMART authorization flow（留空 = 不代理，維持被動）。**留空時沒有任何綁定會發生，`ACCESS_CHECKER=patient`／`list` 的請求一律 401**——這是 ADR-0002 硬切的結果，不是可選擇的降級。見 [SMART Authorization Flow 代理](#smart-authorization-flow-代理)
@@ -413,6 +414,24 @@ launch context 存放在一個窄介面（`LaunchContextStore`，`src/types/laun
 launch context 的**內容**由這裡決定（`patientId` 或 `patientListId` 二擇一），授權層在裁決時
 從 store 讀回來。access token 裡沒有病人資訊。
 
+## Launch Context 的生命週期
+
+一份 launch context 有兩段生命週期，兩段的長度差了三個數量級，因此分開設定：
+
+| 階段 | 設定 | 預設 | 過期之後 |
+| --- | --- | --- | --- |
+| 未綁定（EHR 註冊之後、使用者還沒在 IdP 按下同意） | `LAUNCH_CONTEXT_TTL_SECONDS` | 600 秒 | launch id 視為不存在；`authorize` 以 400 拒絕 |
+| 已綁定（callback 之後，醫師正在處理這位病人） | `LAUNCH_CONTEXT_BOUND_TTL_SECONDS` | 14400 秒（4 小時） | patient／list 模式以 401 拒絕 |
+
+兩個 TTL 都是**固定值**：refresh 不延長綁定的生命週期。到期就是真的到期，這是刻意的——
+靠 refresh token 續期在 EHR launch 語意下不成立（`online_access` 的定義就是使用者離線即失效，
+見 ADR-0004），而依 IdP session 存活續期的那一半尚未實作。
+
+**一位醫師可以對同一個 App 重新 launch，綁定到期與否都不影響這件事。** 綁定以
+`(subject, client id)` 為索引，但**已經發出去的 access token 記的是它被發放時那一筆綁定的
+launch id**，因此這條不變式成立：已經簽發的 token 永遠解析到它被簽發時的那位病人，不會因為
+醫師之後又開了同一個 App 的另一次 launch 而改指向另一位病人。
+
 ## Launch Context Store（Valkey）
 
 `LAUNCH_CONTEXT_STORE=valkey` 之後，launch context 的綁定存在 Valkey 而不是 gateway process 的
@@ -422,6 +441,20 @@ launch context 的**內容**由這裡決定（`patientId` 或 `patientListId` �
 - **多個 gateway instance 看得見彼此的綁定**。一位醫師同時開兩個 App 時，兩個 App 的請求可以
   落在不同 instance 上，各自靠 `(subject, client id)` 索引解析到自己的病人。
 
+### 多 instance 部署需要 sticky session（授權流程）
+
+上面這句只涵蓋**已綁定之後的 FHIR 請求**。授權流程本身不同：
+
+**`authorize` 與 `callback` 必須落在同一個 gateway instance。** pending authorization、
+gateway 發出的一次性 code、以及 refresh token 的索引都在 gateway process 的記憶體裡
+（`SmartAuthorizationSessions`），不在 Valkey。落在不同 instance 上的 callback 會拿到
+「Unknown or already completed authorization」而失敗，App 端看到的是授權失敗。
+
+因此**多 instance 部署需要對 `/smart/*` 的請求做 sticky session**（以 cookie 或
+correlation id 作為 affinity key）。這是 operator 面的部署要求，不是可選的效能優化。
+這一點刻意留在 ticket 之外：把這幾張表也放進 Valkey 會改變 launch context store 的職責範圍，
+需要另外一張票決定它的介面。
+
 ```bash
 LAUNCH_CONTEXT_STORE=valkey
 LAUNCH_CONTEXT_VALKEY_URL=rediss://gateway:<password>@valkey.internal:6379
@@ -429,10 +462,15 @@ LAUNCH_CONTEXT_VALKEY_URL=rediss://gateway:<password>@valkey.internal:6379
 
 ### 正式環境的前提：TLS 與認證
 
-**store 裡暫時放著 IdP 的 token。** 綁定完成之後，gateway 會寫入一組「這張 access token（以
-`jti` 指認）屬於哪一次授權」的索引；靠它，FHIR 請求時 gateway 才能找回這次授權綁的是哪位病人
-（ADR-0002 為什麼用 `jti` 而不是 `(sub, azp)`）。同一個 store 裡還有病人與就診參照（PHI）。
-因此 store 的連線本身就是 PHI 與憑證的傳輸路徑，**正式環境必須加密且有認證**：
+**store 裡放的是病人參照與綁定的索引，不是 IdP 的 token。** 綁定完成之後，gateway 會寫入一組
+「這張 access token（以 `jti` 指認）屬於哪一次授權」的索引；靠它，FHIR 請求時 gateway 才能找回
+這次授權綁的是哪位病人（ADR-0002 為什麼用 `jti` 而不是 `(sub, azp)`）。同一個 store 裡還有病人
+與就診參照（PHI）。
+
+**IdP 的 access token／refresh token 本身不在 store 裡。** 它們只存在 gateway process 記憶體中的
+authorization session（`src/services/smart-authorization-sessions.service.ts`），那是 gateway 發出
+一次性 code 之後、App 換 token 之前那幾秒的流程狀態。因此正式環境的連線要求來自 **PHI**，
+不是來自 token：
 
 - 用 `rediss://`（TLS），不要用明文的 `redis://`。
 - 用專屬帳號並設密碼，不要用無認證的 store。

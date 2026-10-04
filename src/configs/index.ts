@@ -11,6 +11,7 @@ import {
     BUILTIN_ACCESS_CHECKERS,
     DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH,
     DEFAULT_INTERNAL_LAUNCH_API_ENABLED,
+    DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS,
     DEFAULT_LAUNCH_CONTEXT_STORE,
     DEFAULT_LAUNCH_CONTEXT_TTL_SECONDS,
     DEFAULT_PORT,
@@ -133,6 +134,27 @@ function parseLaunchContextTtlSeconds(raw: string | undefined): number {
     if (!Number.isInteger(ttl) || ttl < 1) {
         throw new ConfigError(
             `The environment variable ${ENV_KEYS.LAUNCH_CONTEXT_TTL_SECONDS} must be a positive integer number of seconds (got: ${raw})`,
+        );
+    }
+
+    return ttl;
+}
+
+/**
+ * 解析**已綁定** launch context 的 TTL（秒）。與未綁定的 TTL 分開設定：未綁定那段是
+ * 「EHR 還沒讓使用者按下同意」的一個短視窗，綁定後那段是「醫師處理這位病人」的時長，
+ * 兩者的合理長度差了三個數量級（spec Module 6：已綁定與未綁定可以不同）。
+ */
+function parseLaunchContextBoundTtlSeconds(raw: string | undefined): number {
+    const value = raw?.trim();
+    if (value === undefined || value.length === 0) {
+        return DEFAULT_LAUNCH_CONTEXT_BOUND_TTL_SECONDS;
+    }
+
+    const ttl = Number.parseInt(value, 10);
+    if (!Number.isInteger(ttl) || ttl < 1) {
+        throw new ConfigError(
+            `The environment variable ${ENV_KEYS.LAUNCH_CONTEXT_BOUND_TTL_SECONDS} must be a positive integer number of seconds (got: ${raw})`,
         );
     }
 
@@ -285,6 +307,10 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
 
     const launchContextTtlSeconds = parseLaunchContextTtlSeconds(env[ENV_KEYS.LAUNCH_CONTEXT_TTL_SECONDS]);
 
+    const launchContextBoundTtlSeconds = parseLaunchContextBoundTtlSeconds(
+        env[ENV_KEYS.LAUNCH_CONTEXT_BOUND_TTL_SECONDS],
+    );
+
     const launchContextStoreType = parseLaunchContextStoreType(env[ENV_KEYS.LAUNCH_CONTEXT_STORE]);
     const launchContextValkeyUrl = parseLaunchContextValkeyUrl(
         env[ENV_KEYS.LAUNCH_CONTEXT_VALKEY_URL],
@@ -322,6 +348,7 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
         internalLaunchApiEnabled,
         launchContextTtlSeconds,
         launchContextStoreType,
+        launchContextBoundTtlSeconds,
         ...(launchContextValkeyUrl ? { launchContextValkeyUrl } : {}),
         ...(gatewayPublicBaseUrl ? { gatewayPublicBaseUrl } : {}),
         ...(gatewayClientId && gatewayClientSecret ? { gatewayClientId, gatewayClientSecret } : {}),
