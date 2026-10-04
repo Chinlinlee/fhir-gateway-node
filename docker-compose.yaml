@@ -1,0 +1,73 @@
+# SMART on FHIR 本機開發環境
+#
+# 組成：
+#   keycloak          — 官方 Keycloak（vanilla，無任何客製 SPI）
+#   fhir-gateway-node — FHIR 存取控制反向代理
+#   hapi              — FHIR 測試後端
+#
+# IdP 解偶說明：
+#   架構決策紀錄見 fhir-gateway-node/docs/adr/：
+#     0001 gateway 不簽發 token — token 一律由本 IdP 簽發
+#     0002 launch context 歸 gateway 所有，context 不進 token
+#     0003 tenant 邊界採 per-realm issuer；每家醫院 = 一個 realm
+#
+#   因此本專案不需要任何 Keycloak 客製套件：本機使用 **vanilla** Keycloak，
+#   它只需證明「你是誰」並簽發 scope。Launch context 由 gateway 自己持有與管理
+#   （ADR-0002，已於 #16 實作）：access token 不再攜帶病人資訊。
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:26.3
+    container_name: smart-keycloak
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    ports:
+      - "8080:8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+    volumes:
+      # 首次啟動匯入，之後 Keycloak 以 volume 內的資料為準
+      - ./keycloak/realm-export.json:/opt/keycloak/data/import/realm-export.json:ro
+      - keycloak-data:/opt/keycloak/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080; echo -e 'GET /realms/smart HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3; cat <&3 | head -1 | grep -q '200'"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  fhir-gateway-node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: smart-fhir-gateway-node
+    container_name: smart-fhir-gateway-node
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    ports:
+      - "3000:3000"
+    environment:
+      PROXY_TO: http://hapi:8081/fhir
+      TOKEN_ISSUER: http://keycloak:8080/realms/smart
+      BACKEND_TYPE: HAPI
+      ACCESS_CHECKER: patient
+      RUN_MODE: PROD
+      PORT: "3000"
+      WELL_KNOWN_ENDPOINT: .well-known/openid-configuration
+      # 標準 OIDC 金鑰來源：jwks（OIDC discovery 的 jwks_uri）。改為
+      # keycloak-public-key 可退回 Keycloak root 的 public_key（非標準）。
+      SIGNING_KEY_SOURCE: jwks
+
+  hapi:
+    image: hapiproject/hapi:latest
+    container_name: smart-hapi
+    ports:
+      - "8081:8081"
+    environment:
+      JAVA_OPTS: -Xmx512m
+
+volumes:
+  keycloak-data:

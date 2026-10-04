@@ -737,28 +737,35 @@ pnpm build
 pnpm start
 ```
 
-## docker-compose 對接
+## 本機開發環境（docker-compose）
 
-若你使用 repo 根目錄的 `docker-compose.yaml`，可新增或替換 service 指向 `fhir-gateway-node`：
+repo 根目錄的 `docker-compose.yaml` 會一次起三個 service：
 
-```yaml
-services:
-  fhir-gateway-node:
-    build:
-      context: ./fhir-gateway-node
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    environment:
-      - PROXY_TO=http://host.docker.internal:8081/fhir
-      - TOKEN_ISSUER=http://host.docker.internal:9080/realms/smart
-      - BACKEND_TYPE=HAPI
-      - ACCESS_CHECKER=patient
-      - RUN_MODE=DEV
-```
-
-啟動：
+| service | 說明 | port |
+| --- | --- | --- |
+| `keycloak` | **vanilla** Keycloak（無任何客製 SPI），首次啟動匯入 `keycloak/realm-export.json` | 8080 |
+| `fhir-gateway-node` | 本專案，`build.context` 就是 repo 根目錄 | 3000 |
+| `hapi` | FHIR 測試後端 | 8081 |
 
 ```bash
-docker compose up --build fhir-gateway-node
+docker compose up --build
 ```
+
+匯出的 realm 是 `smart`，內建 `testuser` 與三個 client：`demo-smart-app`、`postman-emr`、
+`postman-smart-app`。（`testuser` 上的 `patient` 屬性是匯出檔裡既有的資料，**gateway 不再讀它**
+——病人參照只來自 launch context store。）
+
+### 這組設定還沒有的東西
+
+`ACCESS_CHECKER=patient` 需要一份 launch context，而 launch context 現在由 **gateway 自己持有**
+（ADR-0002）：token 不再攜帶病人資訊。因此 compose 預設的設定**還不能跑通 patient 模式的完整
+SMART launch**——缺的是：
+
+- `LAUNCH_CONTEXT_STORE=valkey` 與對應的 Valkey service（memory 實作重啟就會丟掉綁定）
+- `INTERNAL_LAUNCH_API_ENABLED` 與 `INTERNAL_LAUNCH_API_CREDENTIAL`——EHR 要先用它註冊一次
+  launch 才有 launch id
+- `GATEWAY_PUBLIC_BASE_URL` 與 gateway 的 IdP client 憑證——沒有這三項，gateway 不註冊
+  代理的 authorization flow，App 只能直接對 Keycloak 走流程，換來的 token 找不到綁定
+
+上面這三組環境變數怎麼接，是本機環境的設定選擇，不是本專案的必要條件；
+`tests/helpers/` 裡的 stub IdP 已經能跑完整條流程。

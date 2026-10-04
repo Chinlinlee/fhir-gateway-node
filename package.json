@@ -15,7 +15,8 @@
         "typecheck": "node node_modules/typescript/bin/tsc --noEmit -p tsconfig.json",
         "lint": "node node_modules/@biomejs/biome/bin/biome check",
         "lint:fix": "node node_modules/@biomejs/biome/bin/biome check --write",
-        "verify": "pnpm run typecheck && pnpm run lint && pnpm run test",
+        "verify": "pnpm run typecheck && pnpm run lint && pnpm run check:glossary && pnpm run test",
+        "check:glossary": "node scripts/check-glossary-terms.mjs",
         "generate:patient-params": "node scripts/generate-patient-params.mjs"
     },
     "keywords": [

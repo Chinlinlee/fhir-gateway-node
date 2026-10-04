@@ -60,6 +60,9 @@ Issues 與 specs 存在本 repo 的 GitHub Issues，用 `gh` CLI 操作。細節
 **先讀 `CONTEXT.md`** — 那是本 repo 的詞彙表，定義了 launch context、trust path、tenant boundary
 等概念，並標明每個詞的 `_Avoid_` 別名。命名時用它，不要自造同義詞。
 
+**`_Avoid_` 裡的禁用詞已經是機械檢查**：`pnpm run check:glossary`（已包含在 `pnpm run verify`
+裡）會擋下它們出現在 `src/` 與 `tests/`。真的需要放行一個詞，改 `CONTEXT.md`，不要改檢查腳本。
+
 接著讀 `docs/adr/` 裡與你正要動的區域相關的 ADR。**若你的改動與某份 ADR 衝突，明確提出來，
 不要默默推翻它。**
 

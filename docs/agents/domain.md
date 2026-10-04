@@ -7,23 +7,13 @@ How the engineering skills should consume this repo's domain documentation when 
 - **`CONTEXT.md` at the repo root.** It exists and holds this repo's glossary: launch context,
   trust path, tenant boundary, and the other terms the authorization layer depends on, each with
   the synonyms to avoid. Read it before naming anything.
-- **`docs/adr/`**: read ADRs that touch the area you're about to work in. There are currently
-  four, and they are decisions rather than suggestions — ADR-0002 in particular decides that the
-  launch context will **not** live in the access token.
+- **`docs/adr/`**: read the ADRs that touch the area you're about to work in. They are decisions
+  rather than suggestions, and they are numbered by topic — read the ones whose titles match your
+  change. ADR-0002 in particular decides that the launch context will **not** live in the access
+  token; ADR-0001 that the gateway signs nothing.
 
 This is a single-context repo, so there is no `CONTEXT-MAP.md`. If a future area introduces one,
 update this file when you do.
-
-## File structure
-
-This is a single-context repo:
-
-```
-/
-├── CONTEXT.md
-└── docs/adr/
-    └── 0001-example-decision.md
-```
 
 ## Use the glossary's vocabulary
 
