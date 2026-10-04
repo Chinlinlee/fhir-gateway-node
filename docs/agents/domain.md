@@ -4,11 +4,15 @@ How the engineering skills should consume this repo's domain documentation when 
 
 ## Before exploring, read these
 
-- **`CONTEXT.md`** at the repo root, or
-- **`CONTEXT-MAP.md`** at the repo root if it exists: it points at one `CONTEXT.md` per context. Read each one relevant to the topic.
-- **`docs/adr/`**: read ADRs that touch the area you're about to work in.
+- **`CONTEXT.md` at the repo root.** It exists and holds this repo's glossary: launch context,
+  trust path, tenant boundary, and the other terms the authorization layer depends on, each with
+  the synonyms to avoid. Read it before naming anything.
+- **`docs/adr/`**: read ADRs that touch the area you're about to work in. There are currently
+  four, and they are decisions rather than suggestions — ADR-0002 in particular decides that the
+  launch context will **not** live in the access token.
 
-If any of these files don't exist, **proceed silently**. Don't flag their absence; don't suggest creating them upfront. The `/domain-modeling` skill creates them lazily when terms or decisions actually get resolved.
+This is a single-context repo, so there is no `CONTEXT-MAP.md`. If a future area introduces one,
+update this file when you do.
 
 ## File structure
 
