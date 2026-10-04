@@ -12,6 +12,11 @@ export const ENV_KEYS = {
     ALLOW_TOKEN_ISSUER_HOST_MISMATCH: "ALLOW_TOKEN_ISSUER_HOST_MISMATCH",
     /** 驗簽金鑰來源：jwks | keycloak-public-key | auto */
     SIGNING_KEY_SOURCE: "SIGNING_KEY_SOURCE",
+    /**
+     * 本資源伺服器接受的 access token `aud` 值（逗號分隔）。留空則不做 `aud` 校驗。
+     * Audience values this resource server answers to; empty disables the check.
+     */
+    TOKEN_AUDIENCE: "TOKEN_AUDIENCE",
 } as const;
 
 export const DEFAULT_ALLOW_TOKEN_ISSUER_HOST_MISMATCH = false;

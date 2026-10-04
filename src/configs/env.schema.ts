@@ -14,6 +14,8 @@ export const GatewayConfigSchema = z.object({
     runMode: z.union(RUN_MODES.map((mode) => z.literal(mode))),
     allowTokenIssuerHostMismatch: z.boolean(),
     signingKeySource: z.union(SIGNING_KEY_SOURCES.map((source) => z.literal(source))).optional(),
+    /** 本 RS 接受的 `aud` 值；未設定或空陣列表示不校驗 `aud`（維持既有行為）。 */
+    tokenAudience: z.array(z.string().min(1)).optional(),
     port: z.number().int().min(1).max(65535).positive().default(DEFAULT_PORT),
 });
 

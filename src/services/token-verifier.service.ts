@@ -7,6 +7,7 @@ import { DEFAULT_SIGNING_KEY_SOURCE } from "../constants/config";
 import { AuthenticationError } from "../errors/authentication.error";
 import type { VerifiedJwt } from "../types/verified-jwt";
 import { HttpUtil } from "../utils/http.util";
+import { resolveExpectedAudiences } from "./audience-policy/audience-policy";
 import type { IssuerPolicy } from "./issuer-policy/issuer-policy";
 import { createIssuerPolicy } from "./issuer-policy/issuer-policy";
 import type { ResolvedSigningKeys, SigningKeyResolver } from "./signing-keys/signing-key-resolver";
@@ -14,7 +15,12 @@ import { resolveSigningKeys } from "./signing-keys/signing-key-resolver";
 
 type TokenVerifierConfig = Pick<
     GatewayConfig,
-    "tokenIssuer" | "wellKnownEndpoint" | "runMode" | "allowTokenIssuerHostMismatch" | "signingKeySource"
+    | "tokenIssuer"
+    | "wellKnownEndpoint"
+    | "runMode"
+    | "allowTokenIssuerHostMismatch"
+    | "signingKeySource"
+    | "tokenAudience"
 >;
 
 /**
@@ -23,11 +29,18 @@ type TokenVerifierConfig = Pick<
  */
 export class TokenVerifierService {
     private readonly issuerPolicy: IssuerPolicy;
+    private readonly expectedAudiences: string[] | undefined;
     private readonly discoveryDocument: string;
     private readonly signingKeyResolver: SigningKeyResolver;
 
-    private constructor(issuerPolicy: IssuerPolicy, discoveryDocument: string, signingKeyResolver: SigningKeyResolver) {
+    private constructor(
+        issuerPolicy: IssuerPolicy,
+        expectedAudiences: string[] | undefined,
+        discoveryDocument: string,
+        signingKeyResolver: SigningKeyResolver,
+    ) {
         this.issuerPolicy = issuerPolicy;
+        this.expectedAudiences = expectedAudiences;
         this.discoveryDocument = discoveryDocument;
         this.signingKeyResolver = signingKeyResolver;
     }
@@ -49,7 +62,12 @@ export class TokenVerifierService {
                 httpUtil,
             }));
 
-        return new TokenVerifierService(createIssuerPolicy(config), resolved.discoveryDocument, resolved.resolver);
+        return new TokenVerifierService(
+            createIssuerPolicy(config),
+            resolveExpectedAudiences(config.tokenAudience),
+            resolved.discoveryDocument,
+            resolved.resolver,
+        );
     }
 
     getWellKnownConfig(): string {
@@ -108,6 +126,10 @@ export class TokenVerifierService {
         return {
             issuer: this.issuerPolicy.resolveVerificationIssuer(jwtIssuer),
             algorithms: [SIGN_ALGORITHM],
+            // jose 在 `audience` 有值時會要求 `aud` claim 存在，並以集合語意比對
+            // （token 的多個 aud 值任一命中即接受；單一字串與單元素陣列皆可）。
+            // 失敗訊息只描述失敗類別，不會帶出本 RS 接受哪些 aud 值。
+            ...(this.expectedAudiences ? { audience: this.expectedAudiences } : {}),
         };
     }
 }

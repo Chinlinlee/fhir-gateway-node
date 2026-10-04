@@ -97,6 +97,18 @@ function parseSigningKeySource(raw: string | undefined): SigningKeySource {
     );
 }
 
+/**
+ * 解析 TOKEN_AUDIENCE：逗號分隔的 `aud` 值清單。全空值等同未設定（不校驗 `aud`），
+ * 因此升級既有部署時不會改變任何已接受 token 的結果。
+ */
+function parseTokenAudience(raw: string | undefined): string[] | undefined {
+    const values = (raw ?? "")
+        .split(",")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0);
+    return values.length > 0 ? values : undefined;
+}
+
 function validateAccessChecker(accessChecker: string, runMode: RunMode): void {
     if (accessChecker === "permissive" && runMode !== "DEV") {
         // 僅開發模式允許
@@ -136,6 +148,8 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
 
     const allowedQueriesFile = env[ENV_KEYS.ALLOWED_QUERIES_FILE]?.trim() ?? undefined;
 
+    const tokenAudience = parseTokenAudience(env[ENV_KEYS.TOKEN_AUDIENCE]);
+
     const portRaw = env[ENV_KEYS.PORT]?.trim();
     const port = portRaw ? Number.parseInt(portRaw, 10) : DEFAULT_PORT;
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -154,6 +168,7 @@ export function loadGatewayConfig(env: EnvSource = process.env): GatewayConfig {
         signingKeySource,
         port,
         ...(allowedQueriesFile ? { allowedQueriesFile } : {}),
+        ...(tokenAudience ? { tokenAudience } : {}),
     };
 
     const result = GatewayConfigSchema.safeParse(candidate);
