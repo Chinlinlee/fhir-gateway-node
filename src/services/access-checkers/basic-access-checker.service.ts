@@ -4,7 +4,7 @@ import type { AccessDecision } from "../../types/access-decision";
 import type { FhirBundleEntry } from "../../types/fhir-bundle";
 import type { FhirRequestDetails } from "../../types/fhir-request";
 import { getResourceIdOrNull, isSameResourceType, parseResourcePath } from "../../utils/fhir.util";
-import { MergedSmartScopeChecker, resolveSmartScopePrincipal, SmartScopePermission } from "../smart-scope.service";
+import { MergedSmartScopeChecker, SmartScopePermission } from "../smart-scope.service";
 import { deniedAccessDecision, grantedAccessDecision, parseRequestBundle } from "./list-access-checker.util";
 
 export class BasicAccessCheckerService implements AccessChecker {
@@ -180,7 +180,7 @@ export class BasicAccessCheckerService implements AccessChecker {
 export const basicAccessCheckerFactory: AccessCheckerFactory = {
     create(context: AccessCheckerCreateContext): AccessChecker {
         const scopes = context.launch.scopes;
-        if (!resolveSmartScopePrincipal(scopes)) {
+        if (scopes.length === 0) {
             throw new AuthenticationError("No SMART FHIR scopes found in launch context");
         }
 

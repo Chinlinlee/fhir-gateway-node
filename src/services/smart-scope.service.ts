@@ -131,24 +131,6 @@ function createSmartScope(scope: string): SmartFhirScope {
     return { principal, resourceType, permissions };
 }
 
-/**
- * 依 SMART 規範決定 access checker 使用的 scope principal。
- * patient/ 需 patient claim；user/、system/ 不要求。
- */
-export function resolveSmartScopePrincipal(scopes: readonly SmartFhirScope[]): SmartScopePrincipal | null {
-    const principals = new Set(scopes.map((scope) => scope.principal));
-    if (principals.has(SmartScopePrincipal.SYSTEM)) {
-        return SmartScopePrincipal.SYSTEM;
-    }
-    if (principals.has(SmartScopePrincipal.USER)) {
-        return SmartScopePrincipal.USER;
-    }
-    if (principals.has(SmartScopePrincipal.PATIENT)) {
-        return SmartScopePrincipal.PATIENT;
-    }
-    return null;
-}
-
 /** 從 JWT scope claim（空白分隔 token 列表）解析 SMART FHIR scopes。 */
 export function extractSmartFhirScopesFromTokens(tokens: readonly string[]): SmartFhirScope[] {
     const scopes: SmartFhirScope[] = [];
