@@ -192,7 +192,8 @@
 ### 6.1 ListAccessChecker（`ACCESS_CHECKER=list`）
 
 > Java 參考：`ListAccessCheckerTest.java`、`AccessGrantedAndUpdateListTest.java`  
-> JWT claim：`patient_list`
+> Launch context 來源：**launch context store**（ADR-0002）。早期以 JWT claim `patient_list` 交付，
+> 該 claim 已移除——沒有任何 IdP 發得出它，list 模式因此在文件記載的部署中一直是 401
 
 - [x] `services/access-checkers/list-access-checker.service.ts`
 - [x] GET：`GET /List/{patientListId}` 僅自己的 list；search 需 **全部** patient 在 list
@@ -205,10 +206,10 @@
 ### 6.2 PatientAccessChecker（`ACCESS_CHECKER=patient`）
 
 > Java 參考：`PatientAccessCheckerTest.java`  
-> JWT claims：**`patient`**（非 `patient_id`）、`scope`
+> Launch context 來源：**launch context store**（ADR-0002）。早期以 JWT claim `patient` 交付，
+> 該 claim 與 `PATIENT_CLAIM` 常數都已移除；scope 仍來自 token
 
 - [x] `services/access-checkers/patient-access-checker.service.ts`
-- [x] 常數 `PATIENT_CLAIM = "patient"`
 - [x] GET/POST/PUT/PATCH/DELETE/Bundle 規則：對照 SPEC §9.2（POST Patient 拒絕、DELETE Patient 拒絕等）
 - [x] 測試：`tests/patient-access-checker.test.ts` — 對照 Java 測試案例（claim 改為 `patient`）
 

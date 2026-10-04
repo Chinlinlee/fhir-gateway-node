@@ -37,10 +37,10 @@ describe("permissive access checker config", () => {
         ).toThrow(ConfigError);
     });
 
-    it("registry registers permissive factory", () => {
+    it("registry registers permissive factory", async () => {
         const registry = createDefaultAccessCheckerRegistry();
         const checker = registry.create("permissive", {
-            launch: launchContextFromClaims({ sub: "dev-user" }),
+            launch: await launchContextFromClaims({ sub: "dev-user" }),
             patientFinder: {
                 findPatientsFromParams: () => new Set(),
                 findPatientsForAccessCheck: () => new Set(),

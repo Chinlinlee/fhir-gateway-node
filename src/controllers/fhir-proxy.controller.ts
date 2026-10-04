@@ -258,7 +258,7 @@ export abstract class FhirProxyController {
                     return createOperationOutcome(401, "login", diagnostics);
                 }
 
-                launch = deps.launchContextProvider.create(verifiedJwt);
+                launch = await deps.launchContextProvider.create(verifiedJwt);
                 queryParams = maybeInjectPatientParam(deps.config, requestPath, method, queryParams, launch);
 
                 const authenticatedRequest = buildRequestDetails(requestPath, method, queryParams, requestBody);

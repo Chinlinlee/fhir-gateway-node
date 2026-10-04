@@ -15,10 +15,19 @@ export type InternalLaunchDeps = {
     store: LaunchContextStore;
 };
 
-const RegisterLaunchContextBodySchema = z.object({
-    patientId: z.string().trim().min(1),
-    encounterId: z.string().trim().min(1).optional(),
-});
+/**
+ * 一次 launch 要嘛綁一位病人（patient compartment launch），要嘛綁一份病人清單
+ * （list launch）；兩者都是 PHI，只進 store 不進 token（ADR-0002）。
+ */
+const RegisterLaunchContextBodySchema = z
+    .object({
+        patientId: z.string().trim().min(1).optional(),
+        patientListId: z.string().trim().min(1).optional(),
+        encounterId: z.string().trim().min(1).optional(),
+    })
+    .refine((body) => (body.patientId !== undefined) !== (body.patientListId !== undefined), {
+        message: "exactly one of patientId or patientListId is required",
+    });
 
 function jsonError(status: number, message: string): Response {
     return Response.json({ error: message }, { status });
@@ -61,12 +70,14 @@ export abstract class InternalLaunchController {
         const parsed = RegisterLaunchContextBodySchema.safeParse(payload);
         if (!parsed.success) {
             logOutcome(400);
-            return jsonError(400, "patientId is required; encounterId is optional");
+            return jsonError(400, "exactly one of patientId or patientListId is required; encounterId is optional");
         }
 
         const created = await deps.store.create({
-            patientId: parsed.data.patientId,
             ttlSeconds: deps.ttlSeconds,
+            ...(parsed.data.patientId !== undefined
+                ? { patientId: parsed.data.patientId }
+                : { patientListId: parsed.data.patientListId ?? "" }),
             ...(parsed.data.encounterId !== undefined ? { encounterId: parsed.data.encounterId } : {}),
         });
 

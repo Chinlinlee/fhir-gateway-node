@@ -8,7 +8,7 @@ import type { GatewayConfig } from "../src/configs/env.schema";
 import { ENV_KEYS, type SigningKeySource } from "../src/constants/config";
 import { FHIR_API_PREFIX, WELL_KNOWN_SMART_CONFIGURATION_PATH } from "../src/constants/routes";
 import { StartupConnectionError } from "../src/errors/startup-connection.error";
-import { PATIENT_CLAIM } from "../src/services/access-checkers/patient-access-checker.service";
+import { InMemoryLaunchContextStore } from "../src/services/launch-context-store.service";
 import type { ResolvedSigningKeys, SigningKeyResolver } from "../src/services/signing-keys/signing-key-resolver";
 import { TokenVerifierService } from "../src/services/token-verifier.service";
 import type { HttpFetchFn } from "../src/utils/http.util";
@@ -20,8 +20,14 @@ import {
     TEST_JWK_KID,
     TEST_JWKS_PATH,
 } from "./helpers/issuer-test-server";
+import { seedLaunchContextForToken } from "./helpers/launch-context-fixture";
 
 const PATIENT_ID = "456";
+/** 這些測試自己簽 token，因此 launch context 的綁定由測試種進 store，而不是 token claim。 */
+const TOKEN_ID = "signing-key-resolver-token";
+const TOKEN_SUBJECT = "gateway-user";
+
+let launchContextStore = new InMemoryLaunchContextStore();
 
 type UpstreamServer = {
     baseUrl: string;
@@ -62,12 +68,12 @@ async function startUpstreamServer(): Promise<UpstreamServer> {
 
 async function signPatientJwt(issuerUrl: string, privateKey: CryptoKey, kid?: string): Promise<string> {
     return await new SignJWT({
-        [PATIENT_CLAIM]: PATIENT_ID,
         scope: "patient/Patient.read",
     })
         .setProtectedHeader({ alg: "RS256", ...(kid ? { kid } : {}) })
         .setIssuer(issuerUrl)
-        .setSubject("gateway-user")
+        .setSubject(TOKEN_SUBJECT)
+        .setJti(TOKEN_ID)
         .sign(privateKey);
 }
 
@@ -104,14 +110,25 @@ function gatewayConfig(issuer: IssuerTestServer, upstream: UpstreamServer, signi
     } satisfies GatewayConfig;
 }
 
+/** 每個測試都用同一組 jti／sub 的綁定，讓 launch context 有 patient compartment 可查。 */
+async function seedLaunchContext(): Promise<void> {
+    launchContextStore = new InMemoryLaunchContextStore();
+    await seedLaunchContextForToken(
+        launchContextStore,
+        { subject: TOKEN_SUBJECT, clientId: "test-app", tokenId: TOKEN_ID },
+        { patientId: PATIENT_ID },
+    );
+}
+
 /** 以指定的 trust path 建立真實 app（resolver 於啟動時解析） */
 async function startGateway(
     issuer: IssuerTestServer,
     upstream: UpstreamServer,
     signingKeySource: SigningKeySource,
 ): Promise<App> {
+    await seedLaunchContext();
     const tokenVerifier = await TokenVerifierService.create(verifierConfig(issuer, signingKeySource));
-    return createApp({ tokenVerifier, config: gatewayConfig(issuer, upstream, signingKeySource) });
+    return createApp({ tokenVerifier, config: gatewayConfig(issuer, upstream, signingKeySource), launchContextStore });
 }
 
 describe("SIGNING_KEY_SOURCE trust paths", () => {
@@ -385,7 +402,12 @@ describe("SIGNING_KEY_SOURCE trust paths", () => {
             undefined,
             injectedSigningKeys,
         );
-        const app = createApp({ tokenVerifier, config: gatewayConfig(issuer, upstream) });
+        await seedLaunchContext();
+        const app = createApp({
+            tokenVerifier,
+            config: gatewayConfig(issuer, upstream),
+            launchContextStore,
+        });
         const jwt = await signPatientJwt(issuer.issuerUrl, issuer.keys.privateKey, TEST_JWK_KID);
 
         // IdP 公布的 JWKS 可正常驗簽，但 app 改用注入的 resolver 後同一 token 必須被拒

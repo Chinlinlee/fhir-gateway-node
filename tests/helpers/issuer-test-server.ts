@@ -194,6 +194,9 @@ export async function startIssuerTestServer(
             .setProtectedHeader({ alg: "RS256", kid: jwk["kid"] as string })
             .setIssuer(issuerUrl)
             .setSubject(code.subject)
+            // `jti` 是 gateway 找回這次 launch context 的索引鍵（ADR-0002），因此每張
+            // access token 都要有，而且每張都不同。
+            .setJti(randomBytes(16).toString("base64url"))
             .sign(privateKey);
 
     /**
